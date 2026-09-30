@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+# a tracker file is personal data; never commit one here
+inflight.md
+inflight-archive/
