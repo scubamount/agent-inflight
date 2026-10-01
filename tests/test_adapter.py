@@ -249,6 +249,30 @@ class WireFormat(Env):
         rc, out = self.run_hook("session-start", {"session_id": "cc-3", "source": "compact"}, harness=None)
         self.assertTrue(out.startswith("[inflight: your open entries"))
 
+    def test_session_end_through_hook_run_marks_ended(self):
+        repo = self.t / "r3"
+        (repo / ".git").mkdir(parents=True)
+        self.run_hook("session-start", {"session_id": "cc-4", "cwd": str(repo), "source": "startup"})
+        rc, out = self.run_hook("session-end", {"session_id": "cc-4", "cwd": str(repo), "reason": "clear",
+                                                "hook_event_name": "SessionEnd"})
+        self.assertEqual((rc, out), (0, ""))
+        d = state.load("cc-4")
+        self.assertIsNotNone(d.get("ended_at"))
+        self.assertEqual(d.get("end_reason"), "clear")
+
+    def test_notebook_edit_payload_records_repo(self):
+        repo = self.t / "r4"
+        (repo / ".git").mkdir(parents=True)
+        payload = {"session_id": "cc-5", "cwd": str(repo), "hook_event_name": "PostToolUse",
+                   "tool_name": "NotebookEdit",
+                   "tool_input": {"notebook_path": str(repo / "n.ipynb"), "new_source": "SECRETCELL"}}
+        rc, out = self.run_hook("post-tool", payload)
+        self.assertEqual((rc, out), (0, ""))
+        self.assertIn(str(repo), state.load("cc-5").get("repos", {}))
+        for f in state.state_dir().rglob("*"):
+            if f.is_file() and f.suffix in (".json", ".log", ""):
+                self.assertNotIn("SECRETCELL", f.read_text(errors="ignore"))
+
     def test_bad_input_still_exit_0_empty(self):
         for raw in ("{", "[]", '"x"', ""):
             out = io.StringIO()

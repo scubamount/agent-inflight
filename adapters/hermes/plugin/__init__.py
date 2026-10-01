@@ -128,19 +128,35 @@ def _call_dirs(task_id: str, args: Any) -> List[str]:
     per task), plus the structured `workdir` / file `path` arguments. Command
     strings are never parsed."""
     out: List[str] = []
+    cwd = ""
     try:
         from tools.terminal_tool import get_session_cwd  # Hermes internal; absent -> skip
-        cwd = get_session_cwd(task_id or None)
+        cwd = get_session_cwd(task_id or None) or ""
         if cwd:
             out.append(cwd)
     except Exception:
         pass
+
+    def anchored(d: str) -> Optional[str]:
+        # Relative args are relative to the SESSION cwd. The daemon's own
+        # process cwd is unrelated (it would record the daemon's repo), so a
+        # relative arg with no known session cwd is dropped, never guessed.
+        d = os.path.expanduser(d)
+        if os.path.isabs(d):
+            return d
+        return os.path.join(cwd, d) if cwd and os.path.isabs(cwd) else None
+
     if isinstance(args, dict):
-        if isinstance(args.get("workdir"), str):
-            out.append(args["workdir"])
+        w = args.get("workdir")
+        if isinstance(w, str) and w:
+            a = anchored(w)
+            if a:
+                out.append(a)
         p = args.get("path")
         if isinstance(p, str) and p:
-            out.append(os.path.dirname(os.path.expanduser(p)) or ".")
+            a = anchored(os.path.dirname(p) or ".")
+            if a:
+                out.append(a)
     return out
 
 

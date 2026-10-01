@@ -261,5 +261,66 @@ class RetagPure(unittest.TestCase):
         self.assertEqual(r.retagged, 0)
 
 
+class CallDirs(TmpHome):
+    """Relative tool args resolve against the session cwd, never the daemon's."""
+
+    def setUp(self):
+        super().setUp()
+        import types
+        self._mods = {k: sys.modules.get(k) for k in ("tools", "tools.terminal_tool")}
+        self.session_cwd = None
+        tt = types.ModuleType("tools.terminal_tool")
+        tt.get_session_cwd = lambda task_id=None: self.session_cwd
+        pkg = types.ModuleType("tools")
+        pkg.terminal_tool = tt
+        sys.modules["tools"], sys.modules["tools.terminal_tool"] = pkg, tt
+        # daemon cwd = a repo the session never touched
+        self.daemon = self.home / "daemon-repo"
+        (self.daemon / ".git").mkdir(parents=True)
+        self.sess = self.home / "session-repo"
+        (self.sess / ".git").mkdir(parents=True)
+        (self.sess / "docs").mkdir()
+        self._cwd = os.getcwd()
+        os.chdir(self.daemon)
+
+    def tearDown(self):
+        os.chdir(self._cwd)
+        for k, v in self._mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        super().tearDown()
+
+    def dirs(self, args):
+        return self.p._call_dirs("task-1", args)
+
+    def test_bare_relative_path_uses_session_cwd(self):
+        self.session_cwd = str(self.sess)
+        d = self.dirs({"path": "notes.md"})
+        self.assertEqual(d, [str(self.sess), os.path.join(str(self.sess), ".")])
+        self.assertNotIn(str(self.daemon), [os.path.realpath(x) for x in d])
+
+    def test_relative_subdir_and_workdir(self):
+        self.session_cwd = str(self.sess)
+        d = self.dirs({"path": "docs/a.md", "workdir": "docs"})
+        self.assertIn(os.path.join(str(self.sess), "docs"), d)
+        self.assertEqual(d.count(os.path.join(str(self.sess), "docs")), 2)
+
+    def test_relative_without_session_cwd_is_dropped(self):
+        self.session_cwd = None
+        self.assertEqual(self.dirs({"path": "notes.md", "workdir": "x"}), [])
+
+    def test_absolute_path_kept_without_session_cwd(self):
+        self.session_cwd = None
+        self.assertEqual(self.dirs({"path": str(self.sess / "docs" / "a.md")}), [str(self.sess / "docs")])
+
+    def test_record_repos_never_records_daemon_repo(self):
+        self.session_cwd = None
+        self.p.record_repos("S-REL", "task-1", {"path": "notes.md"})
+        from agent_inflight import state
+        self.assertNotIn(str(self.daemon.resolve()), (state.load("S-REL") or {}).get("repos", {}))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
