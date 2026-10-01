@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from . import core, paths
+from . import core, paths, progress
 
 
 class HermesBackend:
@@ -132,9 +132,11 @@ def collect(text: str, active_min: int, be) -> Dict:
             untagged += 1
             continue
         info = be.lookup(sid) if be else None
+        p, lc = progress.progress(e.text), progress.lifecycle(e.text)
         rows.append({"session": sid, "status": status(info, active_min, be is not None),
                      "this_session": sid == me, "entry": " ".join(e.head.replace("**", "").split())[:110],
-                     **(info or {})})
+                     "progress": {"done": p.done, "open": p.open, "blocked": p.blocked, "total": p.total},
+                     "state": lc.state, **(info or {})})
     return {"backend": be.name if be else None, "entries": rows, "untagged": untagged}
 
 
@@ -176,6 +178,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if r.get("title"):
             print(f"           title : {r['title'][:90]}")
         print(f"           entry : {r['entry']}")
+        prog = r["progress"]
+        if prog["total"] or r["state"] != "active":
+            label = progress.Progress(prog["done"], prog["open"], prog["blocked"]).label()
+            print(f"           state : {r['state']}" + (f"  progress {label}" if label else ""))
         if be and not r["this_session"] and r["status"] not in ("UNKNOWN", "NO-BACKEND"):
             target = r.get("continued_as") or r["session"]
             drill, resume = be.drill(target, r.get("profile", "default"))

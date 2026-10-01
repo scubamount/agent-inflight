@@ -76,6 +76,9 @@ Don't recite the tracker back to the user. Use it.
 - What did NOT land: unpushed, unrestarted, unverified, waiting on a human.
 - The next concrete step and the handle (SHA, path, PR, process id).
 - One paragraph. Long analysis goes in a file; link the path.
+- Multi-step work: optional checkbox lines under the head (`- [ ]` open,
+  `- [x]` done, `- [~]` blocked + why). `inflight sessions` derives
+  `done/total` from them.
 
 ## Pitfalls
 

@@ -79,6 +79,20 @@ Then wire your agent:
 | `inflight check` | Lint: missing section, duplicate `## Right now`, over budget, undated entries, unexpanded `$VAR` tags. Exit 1 on findings. |
 | `inflight path` | Print the resolved tracker path. |
 
+## Progress (optional)
+
+Checkbox lines in an entry body are counted on every read; nothing is stored:
+
+```markdown
+**2026-09-30 19:10 [session S] — rollout.** prose
+- [x] step one
+- [ ] step two
+- [~] push (blocked: waiting on review)
+```
+
+`inflight sessions` shows `state : active  progress 1/3 (1 blocked)`.
+Head lines and fenced code blocks are never counted.
+
 ## Configuration
 
 All optional, via environment:

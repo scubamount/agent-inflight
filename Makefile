@@ -6,6 +6,7 @@ PY ?= python3
 test:
 	env -u PYTHONPATH $(PY) tests/test_inflight.py
 	env -u PYTHONPATH $(PY) tests/test_hermes_plugin.py
+	env -u PYTHONPATH $(PY) tests/test_derived.py
 
 check: test
 	sh -n install.sh
