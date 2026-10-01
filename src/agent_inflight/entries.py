@@ -52,12 +52,14 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     if not path.exists():
         init_main(["--file", str(path)])
     sid = args.session if args.session is not None else paths.session_id()
-    tag = f" [session {sid}]" if sid else ""
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    entry = core.Entry(f"**{stamp}{tag} — {headline}**" + (f" {body.strip()}" if body.strip() else ""))
 
     before = path.stat()
     sections = core.parse(path.read_text(encoding="utf-8"))
+    taken = {e.id for s in sections for e in s.entries if e.id}
+    eid = core.new_id(f"{stamp}|{sid}|{headline}|{body}", taken)
+    tag = f" [session {sid} #{eid}]" if sid else f" [#{eid}]"
+    entry = core.Entry(f"**{stamp}{tag} — {headline}**" + (f" {body.strip()}" if body.strip() else ""))
     rn = core.right_now(sections)
     if rn is None:
         rn = core.Section(core.RIGHT_NOW)
@@ -94,6 +96,10 @@ def lint(text: str, max_bytes: int = trim.DEFAULT_MAX_BYTES) -> Tuple[str, List[
         undated = sum(1 for e in entries if e.date is None)
         untagged = sum(1 for e in entries if not e.session)
         literal = sum(1 for e in entries if core.LITERAL_TAG_RE.search(e.head))
+        stray = sum(1 for line in rns[0].lead.split("\n") if line.startswith("**"))
+        if stray:
+            findings.append(f"{stray} bold line(s) before the first dated entry (not an entry; "
+                            "start entries with `**YYYY-MM-DD`)")
         if undated:
             findings.append(f"{undated} entr{'y' if undated == 1 else 'ies'} with no date in the head")
         if literal:

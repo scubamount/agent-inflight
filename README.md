@@ -72,12 +72,20 @@ Then wire your agent:
 | Command | Does |
 |---|---|
 | `inflight init` | Create the tracker from the template if missing. Never overwrites. |
-| `inflight add "<head>" [body]` | Prepend `**<date time> [session <id>] — <head>.** <body>` to `## Right now`. Reads stdin if no args. |
+| `inflight add "<head>" [body]` | Prepend `**<date time> [session <id> #<entry-id>] — <head>.** <body>` to `## Right now`. The 6-hex entry id is the stable key `done` matches on. Reads stdin if no args. |
 | `inflight sessions [--json] [--children]` | Owner, status, progress, and drill/resume commands for each tagged entry. `--children` lists the delegated subagent sessions of each entry's conversation, read from the backend (never stored in the file). |
 | `inflight me` | Print this session's `[session <id>]` tag. |
 | `inflight trim [--apply]` | Archive entries past the age limit, then oldest-first until under budget. Dry run by default. |
 | `inflight check` | Lint: missing section, duplicate `## Right now`, over budget, undated entries, unexpanded `$VAR` tags. Exit 1 on findings. |
 | `inflight path` | Print the resolved tracker path. |
+
+## Entry format
+
+An entry starts at a line beginning `**YYYY-MM-DD` and runs to the next one.
+Bold text inside an entry (`**Note:** ...`) stays part of it. Bold lines
+before the first dated entry are not entries; `inflight check` reports them.
+`scripts/parser-parity.py FILE...` compares entry counts under the old
+blank-line rule and the current one.
 
 ## Progress (optional)
 

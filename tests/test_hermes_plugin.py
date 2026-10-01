@@ -232,11 +232,26 @@ class Reinject(TmpHome):
 
 class RetagPure(unittest.TestCase):
     def test_existing_head_edit_not_new_when_id_present(self):
-        before = "## Right now\n\n**2026-09-30 10:00 [session $X #ab12] — a.** x\n"
-        after = "## Right now\n\n**2026-09-30 10:00 [session $X #ab12] — a, edited.** x\n"
-        r = retag.retag(after, retag.snapshot(before), "S", provenance="a, edited")
-        if hasattr(core.Entry, "id"):
-            self.assertEqual((r.retagged, r.foreign), (0, 1))
+        before = "## Right now\n\n**2026-09-30 10:00 [session $X #ab12cd] — a.** x\n"
+        after = "## Right now\n\n**2026-09-30 10:00 [session $X #ab12cd] — a, edited.** x\n"
+        r = retag.retag(after, retag.snapshot(before), "S", provenance="2026-09-30 10:00 — a, edited.")
+        self.assertEqual((r.retagged, r.foreign), (0, 1))
+
+    def test_id_kept_when_tag_rewritten(self):
+        after = "## Right now\n\n**2026-09-30 10:00 [session $HERMES_SESSION_ID #ab12cd] — mine.** x\n"
+        r = retag.retag(after, set(), "S1", provenance="**2026-09-30 10:00 — mine.**")
+        self.assertIn("[session S1 #ab12cd] — mine", r.text)
+        self.assertEqual(core.right_now(core.parse(r.text)).entries[0].id, "ab12cd")
+
+    def test_same_headline_two_sessions_disambiguated_by_id(self):
+        """Two new entries with identical text: only one is in our snapshot diff by id."""
+        before = "## Right now\n\n**2026-09-30 10:00 [session $X #aaaaaa] — same.** x\n"
+        after = ("## Right now\n\n**2026-09-30 10:00 [session $X #bbbbbb] — same.** x\n\n"
+                 "**2026-09-30 10:00 [session $X #aaaaaa] — same.** x\n")
+        r = retag.retag(after, retag.snapshot(before), "S2", provenance="2026-09-30 10:00 — same.")
+        self.assertEqual((r.retagged, r.foreign), (1, 1))
+        self.assertIn("[session S2 #bbbbbb]", r.text)
+        self.assertIn("[session $X #aaaaaa]", r.text)
 
     def test_no_sid_noop(self):
         r = retag.retag(BASE, set(), "", provenance=BASE)

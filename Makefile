@@ -12,4 +12,4 @@ check: test
 	sh -n install.sh
 	sh -n uninstall.sh
 	sh -n adapters/hermes/inflight-trim.sh
-	$(PY) -m py_compile adapters/hermes/plugin/__init__.py
+	$(PY) -m py_compile adapters/hermes/plugin/__init__.py scripts/parser-parity.py

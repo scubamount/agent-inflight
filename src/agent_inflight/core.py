@@ -11,11 +11,18 @@ File shape (all of it optional, parsing never fails):
     ## Some other section
     ...
 
-An ENTRY starts at a line that opens with `**` followed by an ISO date
-(`**2026-09-30`), or with `**` right after a blank line. Every following line
-belongs to it until the next entry start. Entries do not need blank lines
-between them; writers often forget, and a parser that needed them merged two
-entries into one and lost the second one's session tag.
+An ENTRY starts only at a line that opens with `**` followed by an ISO date
+(`**2026-09-30`). Every following line belongs to it until the next entry
+start, so a bolded paragraph inside an entry (`**Note:** ...`) stays part of
+it. Entries do not need blank lines between them; writers often forget, and a
+parser that needed them merged two entries into one and lost the second one's
+session tag. Undated bold text before the first entry is section lead
+(`inflight check` reports it).
+
+The head tag is `[session <id> #<entry-id>]`; `inflight add` writes both.
+The entry id (6 hex chars) is the stable key `done` and the Hermes plugin
+match on, so editing the headline doesn't change which entry it is. Entries
+written before ids existed have none and fall back to the head text.
 """
 from __future__ import annotations
 
@@ -29,10 +36,11 @@ DATE_RE = re.compile(r"(20\d{2})-(\d{2})-(\d{2})")
 ENTRY_DATE_HEAD = re.compile(r"^\*\*\s*20\d{2}-\d{2}-\d{2}")
 # A session tag: `[session <id>]`. Ids are opaque; Hermes uses
 # 20260930_130520_a7dc5f, other harnesses use UUIDs or anything else.
-TAG_RE = re.compile(r"\[session ([A-Za-z0-9][A-Za-z0-9_.:-]*)\]")
+TAG_RE = re.compile(r"\[session ([A-Za-z0-9][A-Za-z0-9_.:-]*)(?: #([0-9a-f]{4,12}))?\]")
+ID_ONLY_RE = re.compile(r"\[#([0-9a-f]{4,12})\]")
 # A tag whose id was never expanded: `[session $HERMES_SESSION_ID]`, `[$X]`,
 # `[${X}]`. Written when an agent hand-types the tag instead of using `add`.
-LITERAL_TAG_RE = re.compile(r"\[(?:session )?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\]")
+LITERAL_TAG_RE = re.compile(r"\[(?:session )?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?: #([0-9a-f]{4,12}))?\]")
 
 
 def parse_date(text: str) -> Optional[date]:
@@ -62,6 +70,18 @@ class Entry:
         m = TAG_RE.search(self.head)
         return m.group(1) if m else None
 
+    @property
+    def id(self) -> Optional[str]:
+        """`#<id>` from the head tag (real or literal), or a bare `[#<id>]`."""
+        m = TAG_RE.search(self.head)
+        if m and m.group(2):
+            return m.group(2)
+        m = LITERAL_TAG_RE.search(self.head)
+        if m and m.group(1):
+            return m.group(1)
+        m = ID_ONLY_RE.search(self.head)
+        return m.group(1) if m else None
+
 
 @dataclass
 class Section:
@@ -84,20 +104,27 @@ class Section:
 
 
 def split_entries(body: str) -> Tuple[str, List[Entry]]:
-    """(lead, entries) for one section body."""
+    """(lead, entries) for one section body. Entries start only at dated `**` heads."""
     lead: List[str] = []
     entries: List[List[str]] = []
-    prev_blank = True
     for line in body.split("\n"):
-        starts = line.startswith("**") and (ENTRY_DATE_HEAD.match(line) or prev_blank)
-        if starts:
+        if ENTRY_DATE_HEAD.match(line):
             entries.append([line])
         elif entries:
             entries[-1].append(line)
         else:
             lead.append(line)
-        prev_blank = not line.strip()
     return "\n".join(lead), [Entry("\n".join(e).strip("\n")) for e in entries]
+
+
+def new_id(seed: str, taken: "set[str]") -> str:
+    """6 hex chars from the seed, lengthened on the (rare) collision."""
+    import hashlib
+    h = hashlib.sha1(seed.encode("utf-8", "replace")).hexdigest()
+    n = 6
+    while h[:n] in taken and n < len(h):
+        n += 1
+    return h[:n]
 
 
 def parse(text: str) -> List[Section]:

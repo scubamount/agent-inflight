@@ -134,5 +134,44 @@ class Children(unittest.TestCase):
             self.assertEqual([k["id"] for k in row["children"]], ["LATE"])
 
 
+class EntryIds(unittest.TestCase):
+    def test_parse_id_forms(self):
+        from agent_inflight import core
+        for head, sid, eid in (("**2026-09-30 [session S #a1b2c3] — x.**", "S", "a1b2c3"),
+                               ("**2026-09-30 [session S] — old style.**", "S", None),
+                               ("**2026-09-30 [#a1b2c3] — untagged.**", None, "a1b2c3"),
+                               ("**2026-09-30 [session $HERMES_SESSION_ID #a1b2c3] — lit.**", None, "a1b2c3")):
+            e = core.Entry(head)
+            self.assertEqual((e.session, e.id), (sid, eid), head)
+
+    def test_add_ids_unique(self):
+        from agent_inflight import core
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            for _ in range(3):
+                run(home, "add", "same headline", sid="S")
+            rn = core.right_now(core.parse((home / "inflight.md").read_text()))
+            ids = [e.id for e in rn.entries]
+            self.assertEqual(len(ids), 3)
+            self.assertEqual(len(set(ids)), 3)
+            self.assertTrue(all(i and len(i) >= 6 for i in ids))
+
+    def test_strict_parser_bold_body(self):
+        from agent_inflight import core
+        t = "## Right now\n\n**2026-09-30 [session S] — a.** x\n\n**Note:** detail\n\n**2026-09-29 — b.**\n"
+        rn = core.right_now(core.parse(t))
+        self.assertEqual(len(rn.entries), 2)
+        self.assertIn("**Note:** detail", rn.entries[0].text)
+        self.assertEqual(core.render(core.parse(t)), core.render(core.parse(core.render(core.parse(t)))))
+
+    def test_check_flags_stray_bold_lead(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / "inflight.md").write_text("## Right now\n\n**not dated** x\n\n**2026-09-30 — ok.**\n")
+            rc, out = run(home, "check")
+            self.assertEqual(rc, 1)
+            self.assertIn("bold line(s) before the first dated entry", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

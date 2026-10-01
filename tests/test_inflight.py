@@ -4,6 +4,7 @@ subprocess against a synthetic home (never the user's real files)."""
 from __future__ import annotations
 
 import json
+import re
 import os
 import sqlite3
 import subprocess
@@ -52,10 +53,11 @@ t = ("# pre\n\n## Right now\n\n**2026-09-30 [session s1] — a.** x\n"
      "**2026-09-29 — b.** y\ncontinued\n\n**untagged para**\n\n## Parked\nstuff\n")
 secs = core.parse(t)
 rn = core.right_now(secs)
-check(rn is not None and len(rn.entries) == 3, "3 entries, incl. one with no blank line before it",
+check(rn is not None and len(rn.entries) == 2, "2 entries, incl. one with no blank line before it",
       str([e.head for e in rn.entries]) if rn else "none")
+check("**untagged para**" in rn.entries[1].text, "undated bold paragraph stays inside its entry (strict parser)")
 check(rn.entries[0].session == "s1" and rn.entries[1].session is None, "tag parsed per entry")
-check(rn.entries[1].text.endswith("continued"), "continuation line stays with its entry")
+check("continued" in rn.entries[1].text, "continuation line stays with its entry")
 check(core.parse(core.render(secs)) == secs or core.render(core.parse(core.render(secs))) == core.render(secs),
       "render is stable (parse∘render fixed point)")
 
@@ -79,9 +81,11 @@ check(again == new and not arch_again, "idempotent on its own output")
 dup = "## Right now\n\n**2026-09-30 — live.**\n\n## Right now\n\n**2026-09-30 — stale copy.**\n"
 nd, ad = trim.plan(dup, today, 7, 10**9, 10**9, 3)
 check("stale copy" not in nd and any("stale copy" in a for a in ad), "second Right now archived whole")
-und = "## Right now\n\n**2026-09-30 — dated.** " + "x" * 500 + "\n\n**no date here** " + "y" * 500 + "\n"
+und = ("## Right now\n\n**2026-09-30 — newer.** " + "x" * 500 + "\n\n**2026-09-29 — older.** " + "y" * 500 + "\n")
 nu, _ = trim.plan(und, today, 7, 700, 10**9, 0)
-check("dated" in nu and "no date here" not in nu, "undated entry evicted before dated under budget")
+check("newer" in nu and "older" not in nu, "older entry evicted before newer under budget")
+lead_only = "## Right now\n\n**no date here** text\n"
+check(trim.plan(lead_only, today, 7, 10, 10**9, 0)[0] == lead_only, "undated bold lead is not an entry; trim leaves it")
 blocks_in = sum(len(s.entries) for s in core.parse(text) if s.is_right_now)
 blocks_out = len(kept) + sum(1 for a in arch if a.startswith("**"))
 check(blocks_in == blocks_out, "count in == count out (no entry lost)", f"{blocks_in} vs {blocks_out}")
@@ -99,8 +103,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check(rc == 0 and "left alone" in out, "init never overwrites")
     rc, out = run(home, "add", "thing: committed, NOT pushed", "next: push", sid="20260930_000000_abcdef")
     body = f.read_text()
-    check(rc == 0 and "[session 20260930_000000_abcdef] — thing: committed, NOT pushed.** next: push" in body,
-          "add writes dated tagged entry", body[-300:])
+    check(rc == 0 and re.search(r"\[session 20260930_000000_abcdef #[0-9a-f]{6}\] — thing: committed, NOT pushed\.\*\* next: push",
+                                body) is not None, "add writes dated tagged entry with an entry id", body[-300:])
     run(home, "add", "second", sid="S2")
     rn = core.right_now(core.parse(f.read_text()))
     check(rn.entries[0].session == "S2" and len(rn.entries) == 2, "add prepends (newest first)")
@@ -139,7 +143,7 @@ with tempfile.TemporaryDirectory() as tmp:
     state_db(home / "profiles" / "ksai" / "state.db", [(K, "work", now - 9000, now - 100, "cli_close", now - 100, None)])
     tags = [A, I, E, P, K, "20990101_000000_ffffff"]
     body = "\n\n".join(f"**2026-09-27 [session {t}] — entry {t[-1]}**" for t in tags)
-    f.write_text(f"## Right now\n{body}\n\n**untagged entry**\n\n## Later\n**x [session {A}]**\n")
+    f.write_text(f"## Right now\n{body}\n\n**2026-09-27 — untagged entry**\n\n## Later\n**x [session {A}]**\n")
     rc, out = run(home, "sessions", "--json", sid=A)
     d = json.loads(out)
     st = {e["session"]: e for e in d["entries"]}

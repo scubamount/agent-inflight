@@ -12,8 +12,10 @@ Rules, all conservative:
   literal tag might belong to any session and is reported, never claimed.
 - A candidate is claimed only when the edit's own text contains it
   (`provenance`): two sessions editing at once can't claim each other's entry.
-- Snapshot keys are the entry id when it has one, else the head line, so an
-  edited head on an existing entry is not mistaken for a new entry.
+- Snapshot keys are the entry id (`#a1b2c3`) when it has one, else the head
+  line, so an edited head on an existing entry is not mistaken for a new
+  entry, and two sessions' new entries are told apart by id. The id is kept
+  when the tag is rewritten.
 
 Pure functions; the caller does the I/O.
 """
@@ -29,7 +31,7 @@ _WS = re.compile(r"\s+")
 
 
 def entry_key(e: "core.Entry") -> str:
-    return getattr(e, "id", None) or e.head
+    return e.id or e.head
 
 
 def snapshot(text: str) -> Set[str]:
@@ -38,16 +40,21 @@ def snapshot(text: str) -> Set[str]:
 
 
 def _norm(s: str) -> str:
+    s = core.LITERAL_TAG_RE.sub("", s)
+    s = core.TAG_RE.sub("", s)
+    s = core.ID_ONLY_RE.sub("", s)
     return _WS.sub(" ", s.replace("**", "").replace("\\", "")).strip()
 
 
 def written_by(e: "core.Entry", provenance: str) -> bool:
-    """True when the edit text contains this entry's head (tag removed)."""
-    head = _norm(core.LITERAL_TAG_RE.sub("", e.head))
-    # The date stamp and the headline are what the writer typed; 60 chars is
-    # enough to be unique and short enough to survive line wrapping.
-    needle = head[:60]
-    return bool(needle) and needle in _norm(core.LITERAL_TAG_RE.sub("", provenance))
+    """True when the edit text contains this entry's head. Tags and ids are
+    removed from both sides first: they are the part a writer gets wrong."""
+    head = _norm(e.head)
+    # The bolded headline (date + text) is what the writer typed; the body may
+    # be wrapped or edited separately. 60 chars is enough to be unique.
+    bold = re.match(r"\*\*(.*?)\*\*", e.head)
+    needle = (_norm(bold.group(1)) if bold else head)[:60]
+    return bool(needle) and needle in _norm(provenance)
 
 
 @dataclass
@@ -78,7 +85,9 @@ def retag(text: str, before: Set[str], sid: str, provenance: str,
             res.unproven += 1
             continue
         head, nl, rest = e.text.partition("\n")
-        e.text = core.LITERAL_TAG_RE.sub(lambda _m: make(sid), head, count=1) + nl + rest
+        eid = e.id
+        e.text = core.LITERAL_TAG_RE.sub(lambda _m: make(sid) if not eid else make(sid)[:-1] + f" #{eid}]",
+                                         head, count=1) + nl + rest
         res.retagged += 1
     if res.retagged:
         res.text = core.render(sections)

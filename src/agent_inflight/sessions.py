@@ -191,7 +191,7 @@ def collect(text: str, active_min: int, be, with_children: bool = False) -> Dict
             continue
         info = be.lookup(sid) if be else None
         p, lc = progress.progress(e.text), progress.lifecycle(e.text)
-        rows.append({"session": sid, "status": status(info, active_min, be is not None),
+        rows.append({"session": sid, "id": e.id, "status": status(info, active_min, be is not None),
                      "this_session": sid == me, "entry": " ".join(e.head.replace("**", "").split())[:110],
                      "progress": {"done": p.done, "open": p.open, "blocked": p.blocked, "total": p.total},
                      "state": lc.state, **(info or {})})
