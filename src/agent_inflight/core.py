@@ -30,6 +30,9 @@ ENTRY_DATE_HEAD = re.compile(r"^\*\*\s*20\d{2}-\d{2}-\d{2}")
 # A session tag: `[session <id>]`. Ids are opaque; Hermes uses
 # 20260930_130520_a7dc5f, other harnesses use UUIDs or anything else.
 TAG_RE = re.compile(r"\[session ([A-Za-z0-9][A-Za-z0-9_.:-]*)\]")
+# A tag whose id was never expanded: `[session $HERMES_SESSION_ID]`, `[$X]`,
+# `[${X}]`. Written when an agent hand-types the tag instead of using `add`.
+LITERAL_TAG_RE = re.compile(r"\[(?:session )?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\]")
 
 
 def parse_date(text: str) -> Optional[date]:

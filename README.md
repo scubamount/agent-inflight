@@ -64,7 +64,7 @@ Then wire your agent:
 
 | Harness | Do |
 |---|---|
-| Hermes | Nothing required; the skill is installed. Optional: two SOUL.md lines and a trim cron, see [adapters/hermes](adapters/hermes/README.md). |
+| Hermes | Nothing required; the skill is installed, and the plugin is linked (enable it with `plugins.enabled: [agent-inflight]`). Optional: two SOUL.md lines and a trim cron, see [adapters/hermes](adapters/hermes/README.md). |
 | Claude Code, Codex, OpenCode, Cursor, others | Paste [adapters/generic/AGENTS-snippet.md](adapters/generic/AGENTS-snippet.md) into your user-level instruction file; add the crontab line for trimming. |
 
 ## Commands
@@ -120,5 +120,5 @@ system of record instead.
 ## Develop
 
 ```bash
-make test        # 39 arms, real CLI via subprocess against a temp home
+make test        # CLI arms (real CLI via subprocess, temp home) + plugin unit tests
 ```

@@ -4,6 +4,7 @@
 #   ./install.sh                 install CLI + create the tracker + Hermes skill (if Hermes present)
 #   ./install.sh --no-skill      CLI + tracker only
 #   ./install.sh --hermes-cron   also copy the trim job script into <hermes-home>/scripts/
+#   ./install.sh --no-plugin     skip the Hermes plugin symlink
 #
 # What it does:
 #   1. Symlinks bin/inflight into $INFLIGHT_BIN_DIR (default ~/.local/bin).
@@ -13,7 +14,11 @@
 #      <hermes-home>/skills/agent/ (overwrites when it differs: this repo is
 #      the source of truth for that skill; edits made live are lost here, so
 #      port them back first).
-#   4. Proves it: runs `inflight check` through the installed symlink.
+#   4. If a Hermes home exists, symlinks adapters/hermes/plugin to
+#      <hermes-home>/plugins/agent-inflight (runtime session tags for hand
+#      edits). Discovery only: Hermes loads it once `plugins.enabled` lists
+#      `agent-inflight` (hermes-agent-patches overlay 126 does that).
+#   5. Proves it: runs `inflight check` through the installed symlink.
 #
 # Env: INFLIGHT_BIN_DIR, INFLIGHT_HOME, HERMES_HOME.
 set -eu
@@ -22,9 +27,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="${INFLIGHT_BIN_DIR:-$HOME/.local/bin}"
 SKILL=1
 CRON=0
+PLUGIN=1
 for arg in "$@"; do
     case "$arg" in
         --no-skill) SKILL=0 ;;
+        --no-plugin) PLUGIN=0 ;;
         --hermes-cron) CRON=1 ;;
         *) echo "  !! unknown option: $arg" >&2; exit 2 ;;
     esac
@@ -68,6 +75,24 @@ if [ "$SKILL" = 1 ]; then
         fi
     else
         echo "  (no Hermes home at $hh; skill not installed — see adapters/generic/AGENTS-snippet.md)"
+    fi
+fi
+
+if [ "$PLUGIN" = 1 ]; then
+    hh="${HERMES_HOME:-$HOME/.hermes}"
+    if [ -d "$hh" ]; then
+        src="$HERE/adapters/hermes/plugin"
+        dst="$hh/plugins/agent-inflight"
+        if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ]; then
+            echo "  ok plugin $dst (up to date)"
+        elif [ -e "$dst" ] && [ ! -L "$dst" ]; then
+            echo "  !! $dst exists and is not a symlink; move it aside and re-run" >&2
+            exit 1
+        else
+            mkdir -p "$hh/plugins"
+            ln -sfn "$src" "$dst"
+            echo "  -> linked plugin $dst -> $src"
+        fi
     fi
 fi
 

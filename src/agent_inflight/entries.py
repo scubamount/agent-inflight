@@ -5,7 +5,7 @@ import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import core, paths, trim
 
@@ -75,6 +75,34 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def lint(text: str, max_bytes: int = trim.DEFAULT_MAX_BYTES) -> Tuple[str, List[str]]:
+    """(summary line, findings) for one tracker text. Shared by `inflight check`
+    and the Hermes plugin, so both report the same thing."""
+    sections = core.parse(text)
+    findings: List[str] = []
+    rns = [s for s in sections if s.is_right_now]
+    if not rns:
+        findings.append("no `## Right now` section")
+    if len(rns) > 1:
+        findings.append(f"{len(rns)} `## Right now` sections (stale copy; `inflight trim --apply` archives it)")
+    size = len(text.encode())
+    if size > max_bytes:
+        findings.append(f"{size:,}B over budget {max_bytes:,}B (`inflight trim --apply`)")
+    summary = f"{size:,}B (~{size // 4:,} tok)"
+    if rns:
+        entries = rns[0].entries
+        undated = sum(1 for e in entries if e.date is None)
+        untagged = sum(1 for e in entries if not e.session)
+        literal = sum(1 for e in entries if core.LITERAL_TAG_RE.search(e.head))
+        if undated:
+            findings.append(f"{undated} entr{'y' if undated == 1 else 'ies'} with no date in the head")
+        if literal:
+            findings.append(f"{literal} entr{'y' if literal == 1 else 'ies'} tagged with an unexpanded "
+                            "variable (`[session $...]`); write entries with `inflight add`")
+        summary = f"{len(entries)} entries, {untagged} untagged, " + summary
+    return summary, findings
+
+
 def check_main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="inflight check",
                                  description="Lint the file. Exit 1 on findings, 0 when clean.")
@@ -85,28 +113,8 @@ def check_main(argv: Optional[List[str]] = None) -> int:
     if not path.is_file():
         print(f"FAIL  {path} missing (run `inflight init`)")
         return 1
-    text = path.read_text(encoding="utf-8")
-    sections = core.parse(text)
-    findings: List[str] = []
-    rns = [s for s in sections if s.is_right_now]
-    if not rns:
-        findings.append("no `## Right now` section")
-    if len(rns) > 1:
-        findings.append(f"{len(rns)} `## Right now` sections (stale copy; `inflight trim --apply` archives it)")
-    size = len(text.encode())
-    if size > args.max_bytes:
-        findings.append(f"{size:,}B over budget {args.max_bytes:,}B (`inflight trim --apply`)")
-    if rns:
-        entries = rns[0].entries
-        undated = sum(1 for e in entries if e.date is None)
-        untagged = sum(1 for e in entries if not e.session)
-        literal = sum(1 for e in entries if "[session $" in e.head)
-        if undated:
-            findings.append(f"{undated} entr{'y' if undated == 1 else 'ies'} with no date in the head")
-        if literal:
-            findings.append(f"{literal} entr{'y' if literal == 1 else 'ies'} tagged with an unexpanded "
-                            "variable (`[session $...]`); write entries with `inflight add`")
-        print(f"{len(entries)} entries, {untagged} untagged, {size:,}B (~{size // 4:,} tok)")
+    summary, findings = lint(path.read_text(encoding="utf-8"), args.max_bytes)
+    print(summary)
     for f in findings:
         print(f"FAIL  {f}")
     if not findings:

@@ -8,6 +8,16 @@
   `<available_skills>`, loaded on trigger)
 - session tags: `HERMES_SESSION_ID` is in every Hermes terminal's
   environment, so `inflight add` tags entries automatically
+- plugin: `<hermes-home>/plugins/agent-inflight` -> `adapters/hermes/plugin`
+  (symlink). Hermes loads it once `plugins.enabled` lists `agent-inflight`.
+  When a tool call hand-edits the tracker and writes a literal
+  `[session $HERMES_SESSION_ID]`, the plugin replaces it with the session id
+  the runtime passed to the hook, and appends any NEW `inflight check`
+  findings to that tool's result. It only claims entries the call's own text
+  contains (a concurrent session's entry is reported, not claimed). Hooks:
+  `pre_tool_call` (observe only, never blocks) + `transform_tool_result`
+  (the only hook whose return reaches the model). No tool calls, no
+  subprocesses; any error leaves the result unchanged.
 - status backend: `inflight sessions` reads `<hermes-home>/state.db` and
   `profiles/*/state.db` read-only, and follows compression children
 
