@@ -23,7 +23,11 @@ LOCK_TIMEOUT_S = 5.0
 
 # Credential shapes. Matches report the KIND only; the value is never echoed.
 SECRET_PATTERNS = [
-    ("openai/anthropic-style key", re.compile(r"\bsk-(?:ant-|live-|proj-|test-)?[A-Za-z0-9_-]{8,}")),
+    # Real keys end in a long random run (sk-ant-api03-<run>, sk-proj-<run>,
+    # sk-<48>). Require a 16+ alnum run holding a letter AND a digit, so
+    # hyphenated words (sk-learn-pipeline, sk-integration-tests) don't match.
+    ("openai/anthropic-style key", re.compile(
+        r"\bsk-(?:[A-Za-z0-9]+[-_]){0,3}(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{16,}")),
     ("GitHub token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}")),
     ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")),
     ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),

@@ -142,6 +142,14 @@ with tempfile.TemporaryDirectory() as tmp:
         rc, out = run(h2, "add", f"deploy: token {fake}", sid="me")
         check(rc == 5 and fake not in f2.read_text() and fake not in out,
               "credential refused, value never echoed", out)
+        for ok_text in ("migrate to «redacted:sk-…» v2", "pin sk-learn-pipeline v2",
+                        "branch sk-integration-tests", "fix sk-proj-rename script"):
+            rc, out = run(h2, "add", ok_text, sid="me")
+            check(rc == 0, f"not a credential: {ok_text!r}", out)
+        for kind, key in (("sk-ant", "sk-ant-api03-" + "Ab3" * 30), ("sk-proj", "sk-proj-" + "x9Y" * 30),
+                          ("legacy sk-", "sk-" + "Q7w" * 16)):
+            rc, out = run(h2, "add", f"leak {key}", sid="me")
+            check(rc == 5 and key not in f2.read_text(), f"real-shaped {kind} key refused", out)
         rc, out = run(h2, "add", "db: postgres://u:" + "hunter2pw@db.local/x", sid="me")
         check(rc == 5, "URL with embedded password refused", out)
         rc, out = run(h2, "add", f"false positive {fake}", "--force", sid="me")

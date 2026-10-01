@@ -17,7 +17,7 @@
 #   4. If a Hermes home exists, symlinks adapters/hermes/plugin to
 #      <hermes-home>/plugins/agent-inflight (runtime session tags for hand
 #      edits). Discovery only: Hermes loads it once `plugins.enabled` lists
-#      `agent-inflight` (hermes-agent-patches overlay 126 does that).
+#      `agent-inflight` (hermes-agent-patches overlay 134 does that).
 #   5. Proves it: runs `inflight check` through the installed symlink.
 #
 # Env: INFLIGHT_BIN_DIR, INFLIGHT_HOME, HERMES_HOME.
