@@ -1,7 +1,7 @@
 ---
 name: inflight-tracker
 description: Shared cross-session work tracker; read at start, update at end.
-version: 0.2.2
+version: 0.3.0
 author: scubamount, Hermes Agent
 license: Proprietary
 platforms: [linux, macos]
@@ -34,6 +34,8 @@ and whether it is still running, and trims the file so it stays cheap to load.
 inflight path                         # which file
 inflight sessions                     # owner + ACTIVE/IDLE/ENDED + progress per entry
 inflight sessions --children          # + delegated subagent sessions (resume handles)
+inflight hook <event> < payload.json  # harness hooks (docs/hook-protocol.md); always exit 0
+inflight plugin list                  # backend plugins; `enable <name>` to allowlist
 inflight me                           # this session's tag
 inflight add "<thing>: <state>" "<not done; next step; who decides>"
 inflight check                        # lint; exit 1 on findings

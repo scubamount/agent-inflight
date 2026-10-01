@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from typing import List, Optional
 
-from . import __version__, entries, paths, sessions, trim
+from . import __version__, paths
 
 USAGE = f"""inflight {__version__} — shared work tracker for agent sessions
 
@@ -18,6 +18,9 @@ USAGE = f"""inflight {__version__} — shared work tracker for agent sessions
   inflight trim [--apply]       pause stale entries; archive done + over-budget ones
   inflight check                lint (exit 1 on findings)
   inflight path                 print the resolved file path
+  inflight hook <event>         hook protocol v1: JSON on stdin, always exit 0
+  inflight plugin list|enable|disable <name>
+                                allowlist for backend plugins (entry points)
 
 file: {{path}}
 """
@@ -26,6 +29,13 @@ file: {{path}}
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     cmd = argv.pop(0) if argv else "help"
+    if cmd == "hook":  # fast path: imports only what the hook needs
+        from . import hook
+        return hook.run(argv)
+    if cmd == "plugin":
+        from . import plugins
+        return plugins.main(argv)
+    from . import entries, sessions, trim
     table = {
         "init": entries.init_main,
         "add": entries.add_main,

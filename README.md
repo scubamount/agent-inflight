@@ -55,8 +55,10 @@ git clone git@github.com:scubamount/agent-inflight.git ~/agent-inflight
 ~/agent-inflight/install.sh            # add --hermes-cron on Hermes for the daily trim job
 ```
 
-That links `inflight` into `~/.local/bin`, creates the tracker if missing,
-and (when Hermes is installed) adds the `inflight-tracker` skill. Update with
+That creates a private venv (stdlib `venv`, offline) at
+`<home>/inflight-state/venv`, links a launcher pinned to it as
+`~/.local/bin/inflight`, creates the tracker if missing, and (when Hermes is
+installed) adds the `inflight-tracker` skill. Update with
 `git -C ~/agent-inflight pull --ff-only && ~/agent-inflight/install.sh`.
 Remove with `./uninstall.sh` (your tracker file is kept).
 
@@ -79,6 +81,8 @@ Then wire your agent:
 | `inflight trim [--apply]` | Pause active entries untouched for `INFLIGHT_STALE_DAYS`; archive done entries after a day; then, over budget, archive done → paused → active (oldest first). Active entries are never archived for age. Dry run by default; lists every pause/archive. |
 | `inflight check` | Lint: missing section, duplicate `## Right now`, over budget, undated entries, unexpanded `$VAR` tags, credential-looking text, tracker readable by others. Exit 1 on findings. |
 | `inflight path` | Print the resolved tracker path. |
+| `inflight hook <event>` | Hook protocol v1: one JSON object on stdin, always exit 0. See [docs/hook-protocol.md](docs/hook-protocol.md). |
+| `inflight plugin list\|enable\|disable <name>` | Allowlist for backend plugins (entry points). Nothing is imported until enabled; every change is logged to `hooks.log`. |
 
 ## Entry format
 
@@ -109,7 +113,7 @@ All optional, via environment:
 | Variable | Default | Meaning |
 |---|---|---|
 | `INFLIGHT_FILE` | `<home>/inflight.md` | Tracker path. |
-| `INFLIGHT_HOME` | `$HERMES_HOME`, else `~/.hermes` if it exists, else `~/.agent-inflight` | Directory for the tracker and `inflight-archive/`. |
+| `INFLIGHT_HOME` | `$HERMES_HOME`, else `~/.hermes` if it exists, else `~/.agent-inflight` | Directory for the tracker, `inflight-archive/` and `inflight-state/` (venv, launcher, per-session hook state, plugin allowlist). |
 | `INFLIGHT_SESSION_ID` | `$HERMES_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID` | Id written into the tag. |
 | `INFLIGHT_DAYS` | `7` | Non-`Right now` sections dated older than this are archived. |
 | `INFLIGHT_STALE_DAYS` | `3` | An active entry untouched this long (head date and its session's last activity) becomes `paused`. |
@@ -121,13 +125,22 @@ All optional, via environment:
 
 ## Session status backends
 
-`inflight sessions` needs to know whether a session id is still alive.
-Built in: **Hermes** (reads `state.db` read-only across profiles, follows
-context-compression children). Without a backend the command still lists
-every tagged entry with status `NO-BACKEND`; the tags and dates alone are
-enough to hand work between sessions. Adding a backend = one class with
-`available()`, `lookup(id)`, `drill(id, profile)` in
-`src/agent_inflight/sessions.py`.
+`inflight sessions` needs to know whether a session id is still alive. It
+asks backends in order; the first that knows the id answers:
+
+1. **Plugins** you enabled with `inflight plugin enable <name>`, in that
+   order. A plugin is a Python package with an `agent_inflight.backends`
+   entry point installed into `<home>/inflight-state/venv`; it is never
+   imported until enabled, and only by `sessions`/`trim` (never by `add`,
+   `check` or hooks). Contract: `src/agent_inflight/backends.py`
+   (`PLUGIN_API_VERSION = 1`).
+2. **Hermes**: reads `state.db` read-only across profiles, follows
+   context-compression children.
+3. **Heartbeat**: state files written by `inflight hook`, for any harness that
+   runs the hooks.
+
+Without a backend the command still lists every tagged entry with status
+`NO-BACKEND`; the tags and dates alone are enough to hand work between sessions.
 
 ## Guarantees
 

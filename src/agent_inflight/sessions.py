@@ -16,149 +16,28 @@ Status comes from a session backend, never guessed:
   UNKNOWN   backend has no such id (typo, pruned, or another machine)
   NO-BACKEND  no backend available on this machine; tags still listed
 
-Backends:
+Backends (backends.py; first answer wins):
+  plugins   allowlisted entry points (`inflight plugin enable <name>`)
   hermes    read-only lookup in $HERMES_HOME/state.db and profiles/*/state.db;
             follows compression children so a tag on a compacted session
             resolves to the session that continues the work; --children
             lists delegated subagent sessions per entry (derived, not stored)
+  heartbeat state files written by `inflight hook` (Claude Code, others)
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import sqlite3
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-from . import core, paths, progress
-
-
-class HermesBackend:
-    name = "hermes"
-
-    def __init__(self, root: Path):
-        self.root = root
-
-    def available(self) -> bool:
-        return bool(self.dbs())
-
-    def dbs(self) -> List[Tuple[str, Path]]:
-        dbs = [("default", self.root / "state.db")]
-        dbs += [(p.parent.name, p) for p in sorted((self.root / "profiles").glob("*/state.db"))]
-        return [(n, p) for n, p in dbs if p.is_file()]
-
-    def _one(self, sid: str) -> Optional[dict]:
-        for profile, db in self.dbs():
-            try:
-                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
-                row = con.execute(
-                    "select title, started_at, ended_at, end_reason, last_activity_at "
-                    "from sessions where id = ?", (sid,)).fetchone()
-                con.close()
-            except sqlite3.Error:
-                continue
-            if row:
-                keys = ("title", "started_at", "ended_at", "end_reason", "last_activity_at")
-                return {"profile": profile, "_db": db, **dict(zip(keys, row))}
-        return None
-
-    # A compression continuation is the row that picks the conversation up when
-    # its parent ended by compression: parent.end_reason == 'compression' and
-    # the child started at (or after) the parent's end. Subagents spawned
-    # BEFORE that end are delegation children, even under a compression parent.
-    _CONT_SLACK_S = 1.0
-
-    @staticmethod
-    def _rows(db: Path, sql: str, args: tuple) -> list:
-        try:
-            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
-            try:
-                return con.execute(sql, args).fetchall()
-            finally:
-                con.close()
-        except sqlite3.Error:
-            return []
-
-    @classmethod
-    def _child(cls, db: Path, sid: str) -> Optional[str]:
-        """The compression continuation of `sid`, if any."""
-        row = cls._rows(db, "select c.id from sessions c join sessions p on c.parent_session_id = p.id "
-                            "where p.id = ? and p.end_reason = 'compression' "
-                            "and c.started_at >= coalesce(p.ended_at, 0) - ? "
-                            "order by c.started_at desc limit 1", (sid, cls._CONT_SLACK_S))
-        return row[0][0] if row else None
-
-    def lineage(self, sid: str, max_hops: int = 50) -> List[str]:
-        """Compression ancestors of `sid`, root first, ending with `sid`. A parent
-        counts only if it ended by compression and `sid` started at/after that
-        end (a continuation); delegation parents are not lineage."""
-        info = self._one(sid)
-        if not info:
-            return [sid]
-        db, chain = info["_db"], [sid]
-        while len(chain) < max_hops:
-            row = self._rows(db, "select p.id from sessions c join sessions p on c.parent_session_id = p.id "
-                                 "where c.id = ? and p.end_reason = 'compression' "
-                                 "and c.started_at >= coalesce(p.ended_at, 0) - ?", (chain[0], self._CONT_SLACK_S))
-            if not row or row[0][0] in chain:
-                break
-            chain.insert(0, row[0][0])
-        return chain
-
-    def children(self, sid: str, limit: int = 50) -> List[dict]:
-        """Delegation children of `sid` and of every compression continuation
-        after it (the same conversation), newest first. Read-only."""
-        info = self._one(sid)
-        if not info:
-            return []
-        db = info["_db"]
-        chain, seen = [sid], {sid}
-        while True:
-            nxt = self._child(db, chain[-1])
-            if not nxt or nxt in seen:
-                break
-            chain.append(nxt)
-            seen.add(nxt)
-        marks = ",".join("?" * len(chain))
-        rows = self._rows(
-            db,
-            "select c.id, c.title, c.started_at, c.ended_at, c.end_reason, c.last_activity_at, c.parent_session_id "
-            f"from sessions c join sessions p on c.parent_session_id = p.id where p.id in ({marks}) "
-            "and not (coalesce(p.end_reason, '') = 'compression' and c.started_at >= coalesce(p.ended_at, 0) - ?) "
-            "order by c.started_at desc limit ?",
-            (*chain, self._CONT_SLACK_S, limit))
-        keys = ("id", "title", "started_at", "ended_at", "end_reason", "last_activity_at", "parent")
-        return [dict(zip(keys, r)) for r in rows]
-
-    def lookup(self, sid: str) -> Optional[dict]:
-        info = self._one(sid)
-        seen = {sid}
-        while info and info.get("end_reason") == "compression":
-            child = self._child(info["_db"], sid)
-            if not child or child in seen:
-                break
-            seen.add(child)
-            nxt = self._one(child)
-            if not nxt:
-                break
-            nxt["continued_as"] = child
-            sid, info = child, nxt
-        if info:
-            info.pop("_db", None)
-        return info
-
-    def drill(self, sid: str, profile: str) -> List[str]:
-        pflag = "" if profile == "default" else f"-p {profile} "
-        return [f"lcm_load_session(session_id='{sid}')  |  session_search(session_id='{sid}')",
-                f"hermes {pflag}--resume {sid}"]
+from . import backends, core, paths, progress
 
 
-def backend(root: Optional[Path] = None):
-    b = HermesBackend(root or Path(os.environ.get("HERMES_ROOT") or os.environ.get("HERMES_HOME")
-                                   or Path.home() / ".hermes"))
-    return b if b.available() else None
+def backend(root: Optional[Path] = None, plugins: bool = True):
+    """Every available backend as one `Chain` (first answer wins), or None."""
+    return backends.chain(root, plugins=plugins)
 
 
 def status(info: Optional[dict], active_min: int, have_backend: bool) -> str:
@@ -166,6 +45,8 @@ def status(info: Optional[dict], active_min: int, have_backend: bool) -> str:
         return "NO-BACKEND"
     if info is None:
         return "UNKNOWN"
+    if info.get("status") in backends.STATUSES:
+        return info["status"]
     if info.get("ended_at"):
         return "ENDED"
     last = info.get("last_activity_at") or info.get("started_at") or 0
@@ -252,10 +133,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"             {st:<7} {k['id']}  {(k.get('title') or '')[:60]}")
         if be and not r["this_session"] and r["status"] not in ("UNKNOWN", "NO-BACKEND"):
             target = r.get("continued_as") or r["session"]
-            drill, resume = be.drill(target, r.get("profile", "default"))
-            print(f"           drill : {drill}")
-            print(f"           resume: {resume}"
-                  + ("   <- ACTIVE: do not resume; coordinate first" if r["status"] == "ACTIVE" else ""))
+            cmds = be.drill(target, r.get("profile", "default"))
+            if len(cmds) >= 1:
+                print(f"           drill : {cmds[0]}")
+            if len(cmds) >= 2:
+                print(f"           resume: {cmds[1]}"
+                      + ("   <- ACTIVE: do not resume; coordinate first" if r["status"] == "ACTIVE" else ""))
     n = len(data["entries"])
     print(f"\n{n} tagged entr{'y' if n == 1 else 'ies'}, {data['untagged']} untagged")
     return 0

@@ -96,6 +96,9 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     except safety.LockTimeout as e:
         print(f"REFUSED: {e}; re-run", file=sys.stderr)
         return 3
+    if kinds:  # --force over a credential match: audit trail, kinds + id only, never the text
+        from . import state
+        state.log("secret-force", event="add", session=sid or None, entry_id=eid, kinds=kinds)
     print(f"added to {path}: {entry.head[:120]}")
     if not sid:
         print("note: untagged (no session id in env); `inflight sessions` cannot track it")
@@ -210,6 +213,22 @@ def lint(text: str, max_bytes: int = trim.DEFAULT_MAX_BYTES) -> Tuple[str, List[
     return summary, findings
 
 
+def interpreter_warning(tracker: Path) -> str:
+    """Non-fatal: install.sh pinned a venv but this process runs another
+    Python (e.g. bin/inflight called directly), so plugins installed in the
+    venv are invisible here."""
+    venv = tracker.parent / "inflight-state" / "venv"
+    if not (venv / "bin" / "python").exists():
+        return ""
+    try:
+        if Path(sys.prefix).resolve() == venv.resolve():
+            return ""
+    except OSError:
+        return ""
+    return (f"running {sys.executable}, not the pinned venv {venv}; backend plugins installed there "
+            "are not visible (run `inflight` from PATH, or re-run install.sh)")
+
+
 def check_main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="inflight check",
                                  description="Lint the file. Exit 1 on findings, 0 when clean.")
@@ -224,6 +243,9 @@ def check_main(argv: Optional[List[str]] = None) -> int:
     mode = path.stat().st_mode & 0o777
     if mode & 0o077:
         findings.append(f"{path.name} is mode {mode:o}, readable by others (`chmod 600 {path}`)")
+    warn = interpreter_warning(path)
+    if warn:
+        print(f"warn  {warn}")
     print(summary)
     for f in findings:
         print(f"FAIL  {f}")

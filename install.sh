@@ -7,8 +7,16 @@
 #   ./install.sh --no-plugin     skip the Hermes plugin symlink
 #
 # What it does:
-#   1. Symlinks bin/inflight into $INFLIGHT_BIN_DIR (default ~/.local/bin).
-#      A symlink, so `git pull` in this checkout is the whole update.
+#   1. Creates a private venv at <tracker dir>/inflight-state/venv with the
+#      stdlib `venv` module (no pip download, no network: config-patch 131
+#      runs this unattended) and writes a launcher that pins `inflight` to
+#      it, so every harness runs the same interpreter. Backend plugins are
+#      pip-installed into that venv by the user (`<venv>/bin/python -m pip
+#      install <pkg>`), never into the system Python. If `venv` is
+#      unavailable the launcher uses python3 and `inflight check` says so.
+#      Symlinks $INFLIGHT_BIN_DIR/inflight (default ~/.local/bin) to the
+#      launcher. The launcher execs this checkout, so `git pull` is the
+#      whole update.
 #   2. Creates the tracker file if missing (`inflight init`); never overwrites.
 #   3. If a Hermes home exists, copies skills/agent/inflight-tracker into
 #      <hermes-home>/skills/agent/ (overwrites when it differs: this repo is
@@ -20,7 +28,9 @@
 #      `agent-inflight` (hermes-agent-patches overlay 134 does that).
 #   5. Proves it: runs `inflight check` through the installed symlink.
 #
-# Env: INFLIGHT_BIN_DIR, INFLIGHT_HOME, HERMES_HOME.
+#   6. Re-run safe: an existing healthy venv and launcher are left as is.
+#
+# Env: INFLIGHT_BIN_DIR, INFLIGHT_HOME, INFLIGHT_FILE, HERMES_HOME.
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -41,17 +51,47 @@ command -v python3 >/dev/null 2>&1 || { echo "  !! python3 not found (need >= 3.
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' \
     || { echo "  !! python3 >= 3.9 required" >&2; exit 1; }
 
-mkdir -p "$BIN_DIR"
 chmod +x "$HERE/bin/inflight"
+TRACKER="$(python3 "$HERE/bin/inflight" path)"
+STATE="$(dirname "$TRACKER")/inflight-state"
+VENV="$STATE/venv"
+mkdir -p "$STATE" && chmod 700 "$STATE"
+if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+    echo "  ok venv $VENV ($("$VENV/bin/python" -c 'import platform; print(platform.python_version())'))"
+else
+    rm -rf "$VENV"
+    # ensurepip installs pip from wheels bundled with Python: offline. Some
+    # distro Pythons ship venv without ensurepip; fall back to --without-pip.
+    if python3 -m venv "$VENV" >/dev/null 2>&1 || { rm -rf "$VENV"; python3 -m venv --without-pip "$VENV" >/dev/null 2>&1; }; then
+        echo "  -> created venv $VENV"
+    else
+        rm -rf "$VENV"
+        echo "  !! python3 -m venv failed; launcher uses python3 (inflight check will warn)" >&2
+    fi
+fi
+LAUNCHER="$STATE/inflight"
+tmp="$STATE/.inflight.$$"
+cat > "$tmp" <<EOF
+#!/bin/sh
+# Written by agent-inflight install.sh; re-run it to regenerate.
+PY="$VENV/bin/python"
+[ -x "\$PY" ] || PY=python3
+exec "\$PY" "$HERE/bin/inflight" "\$@"
+EOF
+chmod 755 "$tmp"
+if cmp -s "$tmp" "$LAUNCHER" 2>/dev/null; then rm -f "$tmp"; echo "  ok launcher $LAUNCHER (up to date)"
+else mv "$tmp" "$LAUNCHER"; echo "  -> wrote launcher $LAUNCHER"; fi
+
+mkdir -p "$BIN_DIR"
 link="$BIN_DIR/inflight"
-if [ -L "$link" ] && [ "$(readlink "$link")" = "$HERE/bin/inflight" ]; then
+if [ -L "$link" ] && [ "$(readlink "$link")" = "$LAUNCHER" ]; then
     echo "  ok $link (up to date)"
 elif [ -e "$link" ] && [ ! -L "$link" ]; then
     echo "  !! $link exists and is not a symlink; move it aside and re-run" >&2
     exit 1
 else
-    ln -sfn "$HERE/bin/inflight" "$link"
-    echo "  -> linked $link -> $HERE/bin/inflight"
+    ln -sfn "$LAUNCHER" "$link"
+    echo "  -> linked $link -> $LAUNCHER"
 fi
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;

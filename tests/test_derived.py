@@ -248,23 +248,21 @@ class DoneAndTrim(unittest.TestCase):
 
     def test_done_refuses_on_concurrent_change(self):
         # exercise the stat check through the module (CLI can't be raced deterministically)
+        # A writer that ignores the lock lands between done's read and its
+        # write: simulated by bumping the mtime from inside parse(), which runs
+        # after the `before` stat and before the `now` stat.
         from agent_inflight import entries as en
-        real = Path.stat
-        n = {"i": 0}
+        real_parse = en.core.parse
 
-        def stat(p, *a, **k):
-            st = real(p, *a, **k)
-            if Path(p) == self.f:
-                n["i"] += 1
-                if n["i"] == 3:
-                    os.utime(self.f, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))
-                    return real(p, *a, **k)
-            return st
-        Path.stat = stat
+        def parse(text):
+            st = self.f.stat()
+            os.utime(self.f, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))
+            return real_parse(text)
+        en.core.parse = parse
         try:
             rc = en.done_main(["aaaaaa", "--file", str(self.f)])
         finally:
-            Path.stat = real
+            en.core.parse = real_parse
         self.assertEqual(rc, 3)
         self.assertNotIn("status:", self.f.read_text())
 

@@ -11,10 +11,14 @@ transform_tool_result if the file changed, rewrite literal `[session $VAR]`
 pre_llm_call          after a context compaction (or on a resumed session),
                       inject this session's OWN entries, scoped to its
                       compression lineage, into the user turn (6 KB cap).
-                      INFLIGHT_REINJECT=0 turns this off.
+                      Lineage comes from the built-in Hermes backend
+                      (read-only state.db), in-process. INFLIGHT_REINJECT=0
+                      turns this off.
 
 The plugin makes no tool calls and no subprocesses, so it cannot re-enter the
-tool loop. Any error falls back to "change nothing" (fail open).
+tool loop. It imports only agent-inflight's own stdlib modules: backend
+plugins (entry points) load in the `inflight` CLI process, never in Hermes.
+Any error falls back to "change nothing" (fail open).
 """
 from __future__ import annotations
 
@@ -32,7 +36,7 @@ _SRC = Path(os.path.realpath(__file__)).parents[3] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from agent_inflight import core, entries, paths, reinject, retag, safety, sessions  # noqa: E402
+from agent_inflight import backends, core, entries, paths, reinject, retag, safety  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +157,10 @@ _SEEN_MAX = 512
 
 
 def _lineage(sid: str) -> List[str]:
-    be = sessions.backend()
-    return be.lineage(sid) if be else [sid]
+    # Built-in Hermes backend only, in-process and read-only. Third-party
+    # backend plugins are never imported into the Hermes process.
+    be = backends.HermesBackend()
+    return be.lineage(sid) if be.available() else [sid]
 
 
 def on_pre_llm_call(session_id: str = "", conversation_history: Any = None,
