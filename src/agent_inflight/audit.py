@@ -58,9 +58,10 @@ def roots() -> List[Tuple[Path, int]]:
     for r in raw if isinstance(raw, list) else []:
         if isinstance(r, str):
             r = {"path": r}
-        if isinstance(r, dict) and isinstance(r.get("path"), str):
+        p = r.get("path") if isinstance(r, dict) else None
+        if isinstance(p, str):
             depth = r.get("depth", 3)
-            out.append((Path(os.path.expanduser(r["path"])), depth if isinstance(depth, int) else 3))
+            out.append((Path(os.path.expanduser(p)), depth if isinstance(depth, int) else 3))
     return out
 
 
@@ -152,8 +153,8 @@ def inspect(repo: str, timeout: float = 5.0) -> RepoState:
     try:
         neutral = neutralizers(Path(repo), timeout)
         g = lambda *a: safe_git(repo, *a, timeout=timeout, neutral=neutral)  # noqa: E731
-        dirty = [l for l in g("status", "--porcelain=v1", "--ignore-submodules=all").splitlines() if l.strip()]
-        tracked = sum(1 for l in dirty if not l.startswith("??"))
+        dirty = [ln for ln in g("status", "--porcelain=v1", "--ignore-submodules=all").splitlines() if ln.strip()]
+        tracked = sum(1 for ln in dirty if not ln.startswith("??"))
         untracked = len(dirty) - tracked
         if tracked or untracked:
             parts = [f"{tracked} modified" if tracked else "", f"{untracked} untracked" if untracked else ""]
@@ -324,7 +325,7 @@ def render_entry(sid: str, rs: RepoState, stamp: str) -> str:
 
 
 def _findings_of(text: str) -> List[str]:
-    return [l.strip()[6:] for _, l in progress.body_lines(text) if l.strip().startswith("- [ ] ")]
+    return [ln.strip()[6:] for _, ln in progress.body_lines(text) if ln.strip().startswith("- [ ] ")]
 
 
 def apply(plan: Plan, path: Path, today: Optional[date] = None) -> Dict[str, int]:
@@ -422,9 +423,9 @@ def _print(plan: Plan, apply_mode: bool) -> None:
         for n in rs.notes:
             print(f"      note: {n}")
     if plan.merged_repos:
-        n = sum(len(rs.merged) for rs in plan.merged_repos)
+        total = sum(len(rs.merged) for rs in plan.merged_repos)
         print(f"\nalready on the default branch (commits on no remote, every one patch-equivalent to the "
-              f"default branch; not owed work): {n} branch(es)")
+              f"default branch; not owed work): {total} branch(es)")
         for rs in plan.merged_repos:
             print(f"  {_short(rs.repo)}:")
             for b, c, d in rs.merged:

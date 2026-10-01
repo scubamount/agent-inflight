@@ -8,8 +8,8 @@
 #
 # What it does:
 #   1. Creates a private venv at <tracker dir>/inflight-state/venv with the
-#      stdlib `venv` module (no pip download, no network: config-patch 131
-#      runs this unattended) and writes a launcher that pins `inflight` to
+#      stdlib `venv` module (no pip download, no network: an unattended installer
+#      may run this) and writes a launcher that pins `inflight` to
 #      it, so every harness runs the same interpreter. Backend plugins are
 #      pip-installed into that venv by the user (`<venv>/bin/python -m pip
 #      install <pkg>`), never into the system Python. If `venv` is
@@ -25,7 +25,7 @@
 #   4. If a Hermes home exists, symlinks adapters/hermes/plugin to
 #      <hermes-home>/plugins/agent-inflight (runtime session tags for hand
 #      edits). Discovery only: Hermes loads it once `plugins.enabled` lists
-#      `agent-inflight` (hermes-agent-patches overlay 134 does that).
+#      `agent-inflight` (add it to config.yaml, or let your config manager do it).
 #   5. Proves it: runs `inflight check` through the installed symlink.
 #
 #   6. Re-run safe: an existing healthy venv and launcher are left as is.

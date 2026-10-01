@@ -41,7 +41,7 @@ _SRC = Path(os.path.realpath(__file__)).parents[3] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from agent_inflight import backends, core, entries, paths, reinject, retag, safety, state  # noqa: E402
+from agent_inflight import backends, entries, paths, reinject, retag, safety, state  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

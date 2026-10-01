@@ -1,0 +1,25 @@
+# Tool configuration only. agent-inflight is not a pip-installable package:
+# install.sh creates a private stdlib venv and runs src/ directly.
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+extend-exclude = ["tests/e2e"]
+
+[tool.ruff.lint]
+# pyflakes + the error-class pycodestyle rules (ruff's defaults) + flake8-bugbear.
+select = ["E4", "E7", "E9", "F", "B"]
+
+[tool.mypy]
+# mypy 2.x cannot target 3.9; the 3.9 CI matrix job proves runtime compatibility.
+python_version = "3.10"
+mypy_path = "src"
+files = ["src/agent_inflight", "adapters/hermes/plugin/__init__.py", "scripts"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# Hermes-internal module, imported lazily only when the plugin runs inside Hermes.
+module = ["tools.*"]
+ignore_missing_imports = true

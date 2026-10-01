@@ -96,7 +96,7 @@ def set_status(entry_text: str, state: str, when: date) -> str:
     if state not in STATES:
         raise ValueError(f"state must be one of {STATES}")
     drop = {i for i, line in body_lines(entry_text) if STATUS_RE.match(line)}
-    lines = [l for i, l in enumerate(entry_text.split("\n")) if i not in drop]
+    lines = [ln for i, ln in enumerate(entry_text.split("\n")) if i not in drop]
     while len(lines) > 1 and not lines[-1].strip():
         lines.pop()
     label = {"done": f"status: done {when.isoformat()}",

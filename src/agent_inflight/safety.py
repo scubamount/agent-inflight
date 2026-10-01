@@ -129,7 +129,7 @@ def locked(path: Path, timeout: float = LOCK_TIMEOUT_S) -> Iterator[None]:
                 if e.errno not in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
                     raise
                 if time.monotonic() >= deadline:
-                    raise LockTimeout(f"{lock} held by another writer for {timeout:.0f}s")
+                    raise LockTimeout(f"{lock} held by another writer for {timeout:.0f}s") from None
                 time.sleep(0.02)
         try:
             yield

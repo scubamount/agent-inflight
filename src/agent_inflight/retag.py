@@ -85,9 +85,8 @@ def retag(text: str, before: Set[str], sid: str, provenance: str,
             res.unproven += 1
             continue
         head, nl, rest = e.text.partition("\n")
-        eid = e.id
-        e.text = core.LITERAL_TAG_RE.sub(lambda _m: make(sid) if not eid else make(sid)[:-1] + f" #{eid}]",
-                                         head, count=1) + nl + rest
+        tag = make(sid) if not e.id else make(sid)[:-1] + f" #{e.id}]"
+        e.text = core.LITERAL_TAG_RE.sub(tag.replace("\\", "\\\\"), head, count=1) + nl + rest
         res.retagged += 1
     if res.retagged:
         res.text = core.render(sections)

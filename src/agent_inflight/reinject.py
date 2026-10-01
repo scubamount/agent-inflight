@@ -83,7 +83,7 @@ def render(entries: List["core.Entry"], sid: str, lineage: List[str], reason: st
             "files named) before acting on either.",
             ""]
     out = list(head)
-    used = sum(len(l.encode()) + 1 for l in out)
+    used = sum(len(ln.encode()) + 1 for ln in out)
     shown = 0
     for e in entries:
         block = e.text.strip()

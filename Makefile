@@ -1,6 +1,6 @@
 PY ?= python3
 
-.PHONY: test check
+.PHONY: test check lint
 
 # Never pipe these targets: a pipe reports the last command's exit code.
 test:
@@ -18,3 +18,8 @@ check: test
 	sh -n adapters/hermes/inflight-trim.sh
 	$(PY) -m py_compile adapters/hermes/plugin/__init__.py scripts/parser-parity.py scripts/bench-hooks.py \
 		examples/backend-example/src/inflight_backend_example/__init__.py
+
+# Needs ruff + mypy: pip install --require-hashes --no-deps -r requirements-lint.txt
+lint:
+	$(PY) -m ruff check .
+	$(PY) -m mypy

@@ -258,7 +258,7 @@ class Classify(World):
         return r
 
     def test_fixture_matrix(self):
-        r = self.build_world()
+        self.build_world()
         plan = audit.build()
         cu = {Path(rs.repo).name: (sid, rs.findings) for sid, rs, _ in plan.catch_up}
         self.assertEqual(set(cu), {"dirty", "unpushed", "noup", "stash", "hostile"})

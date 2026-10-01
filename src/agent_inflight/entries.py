@@ -144,8 +144,8 @@ def _done_locked(path: Path, args: argparse.Namespace) -> int:
     before = path.stat()
     sections = core.parse(path.read_text(encoding="utf-8"))
     rn = core.right_now(sections)
-    hits = match(rn.entries if rn else [], args.match)
-    if not hits:
+    hits = match(rn.entries, args.match) if rn else []
+    if rn is None or not hits:
         print(f"no entry in `## Right now` matches {args.match!r}", file=sys.stderr)
         return 1
     if len(hits) > 1:

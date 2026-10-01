@@ -205,16 +205,16 @@ with tempfile.TemporaryDirectory() as tmp:
 
     print("sessions (hermes backend)")
     now = time.time()
-    A, I, E, P, C, K = (f"20260927_0000{n}0_aaaaa{n}" for n in range(6))
+    A, IDL, E, P, C, K = (f"20260927_0000{n}0_aaaaa{n}" for n in range(6))
     state_db(home / "state.db", [
         (A, "active", now - 600, None, None, now - 60, None),
-        (I, "idle", now - 9000, None, None, now - 7200, None),
+        (IDL, "idle", now - 9000, None, None, now - 7200, None),
         (E, "ended", now - 9000, now - 8000, "agent_close", now - 8000, None),
         (P, "parent", now - 9000, now - 8000, "compression", now - 8000, None),
         (C, "child", now - 8000, None, None, now - 30, P),
     ])
     state_db(home / "profiles" / "ksai" / "state.db", [(K, "work", now - 9000, now - 100, "cli_close", now - 100, None)])
-    tags = [A, I, E, P, K, "20990101_000000_ffffff"]
+    tags = [A, IDL, E, P, K, "20990101_000000_ffffff"]
     body = "\n\n".join(f"**2026-09-27 [session {t}] — entry {t[-1]}**" for t in tags)
     f.write_text(f"## Right now\n{body}\n\n**2026-09-27 — untagged entry**\n\n## Later\n**x [session {A}]**\n")
     rc, out = run(home, "sessions", "--json", sid=A)
@@ -222,7 +222,7 @@ with tempfile.TemporaryDirectory() as tmp:
     st = {e["session"]: e for e in d["entries"]}
     check(len(d["entries"]) == 6 and d["untagged"] == 1, "6 tagged + 1 untagged; only § Right now")
     check(st[A]["status"] == "ACTIVE" and st[A]["this_session"], "ACTIVE, this session")
-    check(st[I]["status"] == "IDLE", "IDLE")
+    check(st[IDL]["status"] == "IDLE", "IDLE")
     check(st[E]["status"] == "ENDED" and st[E]["end_reason"] == "agent_close", "ENDED + reason")
     check(st[P]["status"] == "ACTIVE" and st[P].get("continued_as") == C, "compression parent -> live child")
     check(st[K]["status"] == "ENDED" and st[K]["profile"] == "ksai", "secondary profile db")

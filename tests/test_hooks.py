@@ -12,7 +12,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import time
 import unittest
 import venv
 from pathlib import Path
@@ -327,8 +326,9 @@ class Install(unittest.TestCase):
             home = Path(t).resolve()
             env = env_for(home, INFLIGHT_BIN_DIR=str(home / "bin"), HERMES_HOME=str(home / "nohermes"))
             env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
-            run = lambda: subprocess.run(["sh", str(ROOT / "install.sh"), "--no-skill", "--no-plugin"],
-                                         env=env, capture_output=True, text=True, timeout=180)
+            def run():
+                return subprocess.run(["sh", str(ROOT / "install.sh"), "--no-skill", "--no-plugin"],
+                                      env=env, capture_output=True, text=True, timeout=180)
             p1 = run()
             self.assertEqual(p1.returncode, 0, p1.stdout + p1.stderr)
             st = home / "inflight-state"

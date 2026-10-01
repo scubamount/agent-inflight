@@ -95,7 +95,7 @@ def plan(text: str, today: date, days: int, max_bytes: int, max_lines: int, min_
                         out.paused.append(e.head)
                 keep.append((i, e))
 
-            def size(items):
+            def size(items, s=s):
                 sec = core.Section(s.header, s.lead, [e for _, e in items])
                 r = sec.render()
                 return len(r.encode()), r.count("\n")

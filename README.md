@@ -51,7 +51,7 @@ still owed. The next agent picks it up.
 ## Install
 
 ```bash
-git clone git@github.com:scubamount/agent-inflight.git ~/agent-inflight
+git clone https://github.com/scubamount/agent-inflight.git ~/agent-inflight
 ~/agent-inflight/install.sh            # add --hermes-cron on Hermes for the daily trim job
 ```
 
@@ -185,9 +185,18 @@ The tracker is plain text that gets pasted into model context. Never put
 credentials, customer data, or HR/personnel data in an entry. Link to the
 system of record instead.
 
+To report a vulnerability in agent-inflight itself, see [SECURITY.md](SECURITY.md).
+
 ## Develop
 
 ```bash
 make test        # CLI arms (real CLI via subprocess, temp home) + plugin unit tests
                  # test_extending runs docs/extending.md's walkthrough (pip; needs network, required under CI=true)
+make lint        # ruff + mypy (tool install: see CONTRIBUTING.md)
 ```
+
+Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

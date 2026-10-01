@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import paths, state
+from . import state
 
 HARNESS = "claude-code"
 TOOL_MATCHER = "^(Edit|Write|NotebookEdit|Bash)$"

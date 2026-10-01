@@ -10,7 +10,6 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
