@@ -9,9 +9,10 @@ test:
 	env -u PYTHONPATH $(PY) tests/test_derived.py
 	env -u PYTHONPATH $(PY) tests/test_hooks.py
 	env -u PYTHONPATH $(PY) tests/test_audit.py
+	env -u PYTHONPATH $(PY) tests/test_adapter.py
 
 check: test
 	sh -n install.sh
 	sh -n uninstall.sh
 	sh -n adapters/hermes/inflight-trim.sh
-	$(PY) -m py_compile adapters/hermes/plugin/__init__.py scripts/parser-parity.py
+	$(PY) -m py_compile adapters/hermes/plugin/__init__.py scripts/parser-parity.py scripts/bench-hooks.py

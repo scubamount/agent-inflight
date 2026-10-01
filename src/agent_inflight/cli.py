@@ -20,6 +20,8 @@ USAGE = f"""inflight {__version__} — shared work tracker for agent sessions
   inflight path                 print the resolved file path
   inflight audit [--apply] [--catch-up] [--json]
                                 owed git work per session (dry run by default)
+  inflight adapter install|uninstall|status claude-code [--apply]
+                                Claude Code user hooks (dry run by default)
   inflight hook <event>         hook protocol v1: JSON on stdin, always exit 0
   inflight plugin list|enable|disable <name>
                                 allowlist for backend plugins (entry points)
@@ -40,6 +42,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if cmd == "audit":
         from . import audit
         return audit.main(argv)
+    if cmd == "adapter":
+        from . import adapter_claude
+        return adapter_claude.main(argv)
     from . import entries, sessions, trim
     table = {
         "init": entries.init_main,

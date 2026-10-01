@@ -24,6 +24,11 @@ the tool, so any error is logged to hooks.log and swallowed (fail open).
   heartbeat     {session_id}
 
 `args` (tool arguments) is accepted and never read, stored or logged.
+
+`inflight hook <event> --harness <name>` records the harness name and adapts
+field names and output: with `claude-code`, `tool_name`/`new_cwd` are read and
+model-facing text goes out as `hookSpecificOutput.additionalContext` JSON
+(never a permission decision).
 """
 from __future__ import annotations
 
@@ -44,6 +49,33 @@ def _sid(payload: Dict[str, Any]) -> str:
     if not isinstance(sid, str) or not sid:
         sid = paths.session_id()
     return sid
+
+
+def normalize(event: str, payload: Dict[str, Any], harness: Optional[str]) -> Dict[str, Any]:
+    """Map a harness's own field names onto protocol v1. Claude Code sends
+    `tool_name` (not `tool`) and, on CwdChanged, `new_cwd`."""
+    p = dict(payload)
+    if "tool" not in p and isinstance(p.get("tool_name"), str):
+        p["tool"] = p["tool_name"]
+    if event == "cwd-changed" and isinstance(p.get("new_cwd"), str):
+        p["cwd"] = p["new_cwd"]
+    if harness and not p.get("harness"):
+        p["harness"] = harness
+    return p
+
+
+# Events whose stdout a harness can deliver to the model, and how.
+_CC_EVENT = {"session-start": "SessionStart", "pre-tool": "PreToolUse", "post-tool": "PostToolUse"}
+
+
+def render_for(harness: Optional[str], event: str, text: str) -> str:
+    """Claude Code shows plain stdout to the model only on SessionStart; on
+    PreToolUse it must be `hookSpecificOutput.additionalContext` JSON. No
+    permissionDecision is ever emitted: the hook never allows or denies."""
+    if harness != "claude-code" or event not in _CC_EVENT:
+        return text
+    return json.dumps({"hookSpecificOutput": {"hookEventName": _CC_EVENT[event],
+                                              "additionalContext": text[:9000]}})
 
 
 def _collisions(sid: str, repo: str) -> List[str]:
@@ -93,7 +125,7 @@ def handle(event: str, payload: Dict[str, Any]) -> str:
         if isinstance(harness, str) and harness:
             fields["harness"] = harness[:40]
         state.update(sid, repo=repo, **fields)
-        if source in ("new", "startup"):
+        if source in ("new", "startup", "clear"):
             from . import audit
             audit.catch_up()  # bounded, rate-limited, never raises; writes only for DEAD sessions
         if source not in ("resume", "compact"):
@@ -115,14 +147,18 @@ def handle(event: str, payload: Dict[str, Any]) -> str:
 def run(argv: Optional[List[str]] = None, stdin: Any = None) -> int:
     argv = list(sys.argv[2:] if argv is None else argv)
     event = argv[0] if argv else ""
+    harness = None
+    if "--harness" in argv[1:]:
+        i = argv.index("--harness", 1)
+        harness = argv[i + 1][:40] if i + 1 < len(argv) else None
     try:
         raw = (stdin or sys.stdin).read()
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
             payload = {}
-        out = handle(event, payload)
+        out = handle(event, normalize(event, payload, harness))
         if out:
-            sys.stdout.write(out.rstrip() + "\n")
+            sys.stdout.write(render_for(harness, event, out.rstrip()) + "\n")
     except Exception as e:  # fail open: never block, never exit nonzero
         state.log("hook-error", event=event, error=type(e).__name__)
     return 0

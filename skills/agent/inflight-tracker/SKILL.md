@@ -1,7 +1,7 @@
 ---
 name: inflight-tracker
 description: Shared cross-session work tracker; read at start, update at end.
-version: 0.4.2
+version: 0.5.0
 author: scubamount, Hermes Agent
 license: Proprietary
 platforms: [linux, macos]

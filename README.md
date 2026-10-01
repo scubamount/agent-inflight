@@ -67,7 +67,8 @@ Then wire your agent:
 | Harness | Do |
 |---|---|
 | Hermes | Nothing required; the skill is installed, and the plugin is linked (enable it with `plugins.enabled: [agent-inflight]`). Optional: two SOUL.md lines and a trim cron, see [adapters/hermes](adapters/hermes/README.md). |
-| Claude Code, Codex, OpenCode, Cursor, others | Paste [adapters/generic/AGENTS-snippet.md](adapters/generic/AGENTS-snippet.md) into your user-level instruction file; add the crontab line for trimming. |
+| Claude Code | `inflight adapter install claude-code` (dry run), then `--apply`: session tags, heartbeats, collision warnings, re-inject after `/compact`, catch-up. See [adapters/claude-code](adapters/claude-code/README.md). |
+| Codex, OpenCode, Cursor, others | Paste [adapters/generic/AGENTS-snippet.md](adapters/generic/AGENTS-snippet.md) into your user-level instruction file; add the crontab line for trimming. |
 
 ## Commands
 
@@ -82,7 +83,8 @@ Then wire your agent:
 | `inflight check` | Lint: missing section, duplicate `## Right now`, over budget, undated entries, unexpanded `$VAR` tags, credential-looking text, tracker readable by others. Exit 1 on findings. |
 | `inflight path` | Print the resolved tracker path. |
 | `inflight audit [--apply] [--catch-up] [--json]` | Owed git work (uncommitted, unpushed, branch without upstream, stash) per session. Repos come from hook state (recorded per session) plus the scan roots in `inflight-state/config.json` (`audit.roots`, default `[{"path": "~/code", "depth": 3}]`). A repo whose last recorder ENDED (or went idle past `--stale-min`, default 120) gets one entry per (session, repo), tagged with that session and updated in place on re-runs; clean again → marked done, never deleted. Repos an ACTIVE session recorded are skipped. Scan-root repos no session recorded are listed as **unowned** and never written. Unpushed = commits on **no** remote-tracking ref (`rev-list <branch> --not --remotes`); a branch merely ahead of a stale upstream ref, with its commits on another remote, is a **note**, not owed work. A branch whose every commit on no remote has a patch-id twin on the remote default branch (rebased / cherry-picked; `rev-list --cherry-pick --right-only <default>...<branch>`) is listed in a separate **already on <default>** section with its name and count, never dropped; a squash of several commits has no twin and stays unpushed, and a failed or timed-out check keeps the branch unpushed. No network calls (refs are as last fetched). Optional `audit.ignore_branches` (glob list, off by default; `inflight check` prints it when set). Dry run by default (`--dry-run` accepted, wins over `--apply`). `--catch-up` = recorded repos only (what `session-start` and the cron run). |
-| `inflight hook <event>` | Hook protocol v1: one JSON object on stdin, always exit 0. See [docs/hook-protocol.md](docs/hook-protocol.md). |
+| `inflight adapter install\|uninstall\|status claude-code [--apply]` | Claude Code user-level hooks. Dry run prints the exact diff; `--apply` backs up and merges, never touching existing hooks; refuses under managed hook lockdown. See [adapters/claude-code](adapters/claude-code/README.md). |
+| `inflight hook <event> [--harness <name>]` | Hook protocol v1: one JSON object on stdin, always exit 0. See [docs/hook-protocol.md](docs/hook-protocol.md). |
 | `inflight plugin list\|enable\|disable <name>` | Allowlist for backend plugins (entry points). Nothing is imported until enabled; every change is logged to `hooks.log`. |
 
 ## Entry format

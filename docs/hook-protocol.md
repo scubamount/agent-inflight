@@ -14,6 +14,14 @@ inflight hook <event>   < one JSON object on stdin
 - **`args` (tool arguments) is accepted and never read, stored or logged.**
 - **`session_id`** falls back to `$INFLIGHT_SESSION_ID`, `$HERMES_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. It must match `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`, with no `..`. Anything else is refused (logged as `hook-refused`), and the id is never used as a file name.
 
+## Harness flag
+
+`inflight hook <event> --harness <name>` records the harness name in the session state. With `claude-code`:
+
+- Claude Code's own field names are read: `tool_name`, and `new_cwd` on `CwdChanged`.
+- Text meant for the model is printed as `{"hookSpecificOutput": {"hookEventName": ..., "additionalContext": ...}}`. Claude Code passes plain stdout to the model only on `SessionStart`.
+- No permission decision is ever emitted.
+
 ## Events
 
 | Event | Payload | Effect | stdout |
