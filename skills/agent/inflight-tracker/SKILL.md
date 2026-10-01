@@ -1,7 +1,7 @@
 ---
 name: inflight-tracker
 description: Shared cross-session work tracker; read at start, update at end.
-version: 0.1.0
+version: 0.2.0
 author: scubamount, Hermes Agent
 license: Proprietary
 platforms: [linux, macos]
@@ -37,7 +37,8 @@ inflight sessions --children          # + delegated subagent sessions (resume ha
 inflight me                           # this session's tag
 inflight add "<thing>: <state>" "<not done; next step; who decides>"
 inflight check                        # lint; exit 1 on findings
-inflight trim                         # dry run; --apply archives old entries
+inflight done <id|words>              # mark finished; trim archives it after a day
+inflight trim                         # dry run; --apply pauses stale, archives done/over-budget
 ```
 
 ## Procedure
@@ -68,7 +69,8 @@ Don't recite the tracker back to the user. Use it.
    when your own edit wrote the entry, and says so in the tool result.
 2. Taking over another session's entry: edit that entry in place and append
    `(took over <old-id>)`. Don't add a duplicate.
-3. Resolved work: delete its entry. The tracker is state, not history.
+3. Resolved work: `inflight done <id>` (the `#a1b2c3` in its tag). Trim
+   archives it after a day. Deleting the entry by hand also works.
 4. Done when `inflight check` exits 0 or its only finding is the size budget.
 
 ### What a good entry says
@@ -92,7 +94,12 @@ Don't recite the tracker back to the user. Use it.
 - **Size is a per-turn cost.** Harnesses that inject the file every turn pay
   for every byte. `trim` enforces a byte + line budget and an age limit;
   archived text goes to `inflight-archive/`, nothing is deleted.
-- **Undated entries are archived first** under budget pressure. Date them.
+- **Entries start only at `**YYYY-MM-DD`.** Bold text without a leading date
+  is part of the entry above (or reported by `check` if above all entries).
+- **Stale ≠ archived.** An active entry untouched for 3 days becomes
+  `status: paused (stale since D)`; it is archived only under budget
+  pressure, after every done entry. Remove the status line (or
+  `inflight done <id> --reopen`) to reactivate.
 - **No secrets, no customer PII, no HR data** in entries. The file is plain
   text on disk and gets pasted into model context.
 

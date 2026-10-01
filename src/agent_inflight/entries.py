@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import core, paths, trim
+from . import core, paths, progress, trim
 
 TEMPLATE = (Path(__file__).resolve().parent / "template.md")
 
@@ -74,6 +74,67 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     print(f"added to {path}: {entry.head[:120]}")
     if not sid:
         print("note: untagged (no session id in env); `inflight sessions` cannot track it")
+    return 0
+
+
+def match(entries: "List[core.Entry]", needle: str) -> List[int]:
+    """Indexes of entries matching `needle`: an exact entry id (`a1b2c3` or
+    `#a1b2c3`) wins outright; otherwise a case-insensitive substring of the
+    head (session id, date, headline words)."""
+    n = needle.strip().lstrip("#")
+    by_id = [i for i, e in enumerate(entries) if e.id and e.id == n.lower()]
+    if by_id:
+        return by_id
+    low = needle.strip().lower()
+    return [i for i, e in enumerate(entries) if low and low in e.head.lower()]
+
+
+def done_main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="inflight done",
+        description="Mark one `## Right now` entry done (or reopen it). Trim archives done entries "
+                    "after the grace period. Exit 0 written, 1 no match, 2 ambiguous, 3 file changed.")
+    ap.add_argument("match", help="entry id (a1b2c3), or a substring of the head: session id, date, headline words")
+    ap.add_argument("--reopen", action="store_true", help="remove the status line (back to active)")
+    ap.add_argument("--dry-run", action="store_true", help="print the change, write nothing")
+    ap.add_argument("--file", type=Path, default=None)
+    ap.add_argument("--today", help=argparse.SUPPRESS)
+    args = ap.parse_args(argv)
+    path = (args.file or paths.inflight_file()).expanduser()
+    if not path.is_file():
+        print(f"{path} not found (run `inflight init`)", file=sys.stderr)
+        return 1
+    before = path.stat()
+    sections = core.parse(path.read_text(encoding="utf-8"))
+    rn = core.right_now(sections)
+    hits = match(rn.entries if rn else [], args.match)
+    if not hits:
+        print(f"no entry in `## Right now` matches {args.match!r}", file=sys.stderr)
+        return 1
+    if len(hits) > 1:
+        print(f"{len(hits)} entries match {args.match!r}; use the entry id or more words:", file=sys.stderr)
+        for i in hits:
+            e = rn.entries[i]
+            print(f"  #{e.id or '------'}  {' '.join(e.head.replace('**', '').split())[:100]}", file=sys.stderr)
+        return 2
+    e = rn.entries[hits[0]]
+    today = date.fromisoformat(args.today) if args.today else date.today()
+    state = "active" if args.reopen else "done"
+    new_text = progress.set_status(e.text, state, today)
+    label = " ".join(e.head.replace("**", "").split())[:100]
+    if new_text == e.text:
+        print(f"unchanged (already {state}): {label}")
+        return 0
+    if args.dry_run:
+        print(f"would mark {state}: {label}")
+        return 0
+    e.text = new_text
+    now = path.stat()
+    if (now.st_mtime_ns, now.st_size) != (before.st_mtime_ns, before.st_size):
+        print("REFUSED: file changed while writing; re-run", file=sys.stderr)
+        return 3
+    trim.atomic_write(path, core.render(sections))
+    print(f"marked {state}: {label}")
     return 0
 
 

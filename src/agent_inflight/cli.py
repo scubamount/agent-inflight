@@ -10,9 +10,12 @@ USAGE = f"""inflight {__version__} — shared work tracker for agent sessions
 
   inflight init                 create the file if missing
   inflight add "<head>" [body]  prepend a dated, session-tagged entry
-  inflight sessions [--json]    who owns each entry; ACTIVE / IDLE / ENDED
+  inflight sessions [--json] [--children]
+                                who owns each entry; ACTIVE / IDLE / ENDED; progress
   inflight me                   print this session's tag
-  inflight trim [--apply]       archive old entries; keep within budget
+  inflight done <match> [--reopen] [--dry-run]
+                                mark an entry done (trim archives it after a day)
+  inflight trim [--apply]       pause stale entries; archive done + over-budget ones
   inflight check                lint (exit 1 on findings)
   inflight path                 print the resolved file path
 
@@ -26,6 +29,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     table = {
         "init": entries.init_main,
         "add": entries.add_main,
+        "done": entries.done_main,
         "check": entries.check_main,
         "trim": trim.main,
         "sessions": sessions.main,

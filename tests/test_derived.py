@@ -173,5 +173,101 @@ class EntryIds(unittest.TestCase):
             self.assertIn("bold line(s) before the first dated entry", out)
 
 
+class DoneAndTrim(unittest.TestCase):
+    def setUp(self):
+        self._t = tempfile.TemporaryDirectory()
+        self.home = Path(self._t.name)
+        self.f = self.home / "inflight.md"
+        self.f.write_text("## Right now\n\n"
+                          "**2026-09-30 10:00 [session S #aaaaaa] — push foo.** x\n- [x] a\n\n"
+                          "**2026-09-29 10:00 [session S #bbbbbb] — push bar.** y\n\n"
+                          "**2026-09-20 10:00 [session T #cccccc] — old work.** z\n")
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_done_by_id_and_substring(self):
+        rc, out = run(self.home, "done", "#bbbbbb", "--today", "2026-09-30")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("status: done 2026-09-30", self.f.read_text())
+        rc, out = run(self.home, "done", "foo", "--dry-run")
+        self.assertEqual(rc, 0)
+        self.assertIn("would mark done", out)
+        self.assertEqual(self.f.read_text().count("status: done"), 1)
+
+    def test_done_ambiguous_and_missing(self):
+        rc, out = run(self.home, "done", "push")
+        self.assertEqual(rc, 2)
+        self.assertIn("#aaaaaa", out)
+        self.assertIn("#bbbbbb", out)
+        rc, _ = run(self.home, "done", "nonesuch")
+        self.assertEqual(rc, 1)
+
+    def test_reopen(self):
+        run(self.home, "done", "aaaaaa", "--today", "2026-09-30")
+        rc, out = run(self.home, "done", "aaaaaa", "--reopen")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("status:", self.f.read_text())
+        rc, out = run(self.home, "done", "aaaaaa", "--reopen")
+        self.assertIn("unchanged", out)
+
+    def test_trim_order_and_never_age_archive_active(self):
+        from agent_inflight import trim
+        run(self.home, "done", "bbbbbb", "--today", "2026-09-28")
+        text = self.f.read_text()
+        p = trim.plan(text, date(2026, 9, 30), 7, 10**9, 10**9, 0)
+        self.assertTrue(any("push bar" in a for a in p.archived))       # done past grace -> archived
+        self.assertIn("old work", p.text)                               # 10 days old, active -> kept
+        self.assertTrue(any("old work" in h for h in p.paused))         # ...but paused
+        self.assertIn("status: paused (stale since 2026-09-30)", p.text)
+        # under budget pressure paused goes before active
+        p2 = trim.plan(p.text, date(2026, 9, 30), 7, len(p.text.encode()) - 1, 10**9, 0)
+        self.assertTrue(any("old work" in a for a in p2.archived))
+        self.assertIn("push foo", p2.text)
+
+    def test_done_within_grace_kept(self):
+        from agent_inflight import trim
+        run(self.home, "done", "aaaaaa", "--today", "2026-09-30")
+        p = trim.plan(self.f.read_text(), date(2026, 9, 30), 7, 10**9, 10**9, 0)
+        self.assertIn("push foo", p.text)
+
+    def test_session_activity_keeps_entry_active(self):
+        from agent_inflight import trim
+        p = trim.plan(self.f.read_text(), date(2026, 9, 30), 7, 10**9, 10**9, 0, activity={"T": time.time()})
+        self.assertFalse(any("old work" in h for h in p.paused))
+
+    def test_cli_trim_reads_backend_activity(self):
+        """Through the real CLI: T's entry is 10 days old; with T active now it stays active,
+        without a backend it is paused."""
+        rc, out = run(self.home, "trim", "--today", "2026-09-30")
+        self.assertIn("pause (stale 3d+): 2026-09-20 10:00 [session T", out)
+        now = time.time()
+        state_db(self.home / "state.db", [("T", "t", now - 99, None, None, now - 5, None, "tui")])
+        rc, out = run(self.home, "trim", "--today", date.today().isoformat())
+        self.assertNotIn("pause (stale 3d+): 2026-09-20 10:00 [session T", out)
+
+    def test_done_refuses_on_concurrent_change(self):
+        # exercise the stat check through the module (CLI can't be raced deterministically)
+        from agent_inflight import entries as en
+        real = Path.stat
+        n = {"i": 0}
+
+        def stat(p, *a, **k):
+            st = real(p, *a, **k)
+            if Path(p) == self.f:
+                n["i"] += 1
+                if n["i"] == 3:
+                    os.utime(self.f, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))
+                    return real(p, *a, **k)
+            return st
+        Path.stat = stat
+        try:
+            rc = en.done_main(["aaaaaa", "--file", str(self.f)])
+        finally:
+            Path.stat = real
+        self.assertEqual(rc, 3)
+        self.assertNotIn("status:", self.f.read_text())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

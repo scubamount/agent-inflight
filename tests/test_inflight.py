@@ -65,29 +65,33 @@ print("trim (pure)")
 today = core.parse_date("2026-09-30")
 old = "\n\n".join(f"**2026-09-{d:02d} [session s{d}] — e{d}.** " + "x" * 300 for d in range(30, 0, -1))
 text = f"## Right now\n\n{old}\n\n## Undated\nold stuff\n\n## 2026-09-29 notes\nfresh\n"
-new, arch = trim.plan(text, today, days=7, max_bytes=10**9, max_lines=10**9, min_entries=3)
+P = lambda *a, **k: (lambda r: (r.text, r.archived))(trim.plan(*a, **k))  # noqa: E731
+new, arch = P(text, today, days=7, max_bytes=10**9, max_lines=10**9, min_entries=3)
 kept = core.right_now(core.parse(new)).entries
-check(all(e.date >= core.parse_date("2026-09-23") for e in kept) and len(kept) == 8, "age: keeps 8 in-window",
-      str(len(kept)))
+check(len(kept) == 30, "age never archives an ACTIVE entry (0.2.0)", str(len(kept)))
+paused = [e for e in kept if "status: paused" in e.text]
+check(len(paused) == 30 - 3 - 0 and all(e.date <= core.parse_date("2026-09-27") for e in paused),
+      "age pauses entries untouched for --stale-days (3)", str(len(paused)))
 check("## Undated" not in new and "## 2026-09-29 notes" in new, "undated section archived, dated kept")
-new2, _ = trim.plan(text, today, days=365, max_bytes=2000, max_lines=10**9, min_entries=3)
+new2, _ = P(text, today, days=365, max_bytes=2000, max_lines=10**9, min_entries=3)
 kept2 = core.right_now(core.parse(new2)).entries
 check(len(new2.encode()) <= 2000 + 400 and [e.session for e in kept2][:1] == ["s30"],
       "budget: evicts oldest, newest stays", f"{len(new2.encode())}B {[e.session for e in kept2]}")
-new3, _ = trim.plan(text, today, days=365, max_bytes=10, max_lines=10**9, min_entries=3)
+new3, _ = P(text, today, days=365, max_bytes=10, max_lines=10**9, min_entries=3)
 check(len(core.right_now(core.parse(new3)).entries) == 3, "floor: min_entries survive an impossible budget")
-again, arch_again = trim.plan(new, today, 7, 10**9, 10**9, 3)
+again, arch_again = P(new, today, 7, 10**9, 10**9, 3)
 check(again == new and not arch_again, "idempotent on its own output")
 dup = "## Right now\n\n**2026-09-30 — live.**\n\n## Right now\n\n**2026-09-30 — stale copy.**\n"
-nd, ad = trim.plan(dup, today, 7, 10**9, 10**9, 3)
+nd, ad = P(dup, today, 7, 10**9, 10**9, 3)
 check("stale copy" not in nd and any("stale copy" in a for a in ad), "second Right now archived whole")
 und = ("## Right now\n\n**2026-09-30 — newer.** " + "x" * 500 + "\n\n**2026-09-29 — older.** " + "y" * 500 + "\n")
-nu, _ = trim.plan(und, today, 7, 700, 10**9, 0)
+nu, _ = P(und, today, 7, 700, 10**9, 0)
 check("newer" in nu and "older" not in nu, "older entry evicted before newer under budget")
 lead_only = "## Right now\n\n**no date here** text\n"
-check(trim.plan(lead_only, today, 7, 10, 10**9, 0)[0] == lead_only, "undated bold lead is not an entry; trim leaves it")
+check(P(lead_only, today, 7, 10, 10**9, 0)[0] == lead_only, "undated bold lead is not an entry; trim leaves it")
+new4, arch4 = P(text, today, days=365, max_bytes=2000, max_lines=10**9, min_entries=3)
 blocks_in = sum(len(s.entries) for s in core.parse(text) if s.is_right_now)
-blocks_out = len(kept) + sum(1 for a in arch if a.startswith("**"))
+blocks_out = len(core.right_now(core.parse(new4)).entries) + sum(1 for a in arch4 if a.startswith("**"))
 check(blocks_in == blocks_out, "count in == count out (no entry lost)", f"{blocks_in} vs {blocks_out}")
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -121,10 +125,11 @@ with tempfile.TemporaryDirectory() as tmp:
     f.write_text(f"## Right now\n\n{old}\n")
     rc, out = run(home, "trim", "--today", "2026-09-30")
     check(rc == 0 and "dry run" in out and f.read_text().count("**2026") == 30, "dry run writes nothing")
-    rc, out = run(home, "trim", "--apply", "--today", "2026-09-30")
+    rc, out = run(home, "trim", "--apply", "--today", "2026-09-30", "--max-bytes", "4000")
     archives = list((home / "inflight-archive").glob("*.md"))
-    check(rc == 0 and len(archives) == 1 and f.read_text().count("**2026") == 8, "apply archives + writes", out)
-    rc, out = run(home, "trim", "--apply", "--today", "2026-09-30")
+    check(rc == 0 and len(archives) == 1 and 0 < f.read_text().count("**2026") < 30
+          and "status: paused" in f.read_text(), "apply pauses stale, archives over budget, writes", out)
+    rc, out = run(home, "trim", "--apply", "--today", "2026-09-30", "--max-bytes", "4000")
     check("already trimmed" in out and len(list((home / "inflight-archive").glob("*.md"))) == 1,
           "second apply is a no-op, no new archive")
     total = archives[0].read_text().count("**2026") + f.read_text().count("**2026")
