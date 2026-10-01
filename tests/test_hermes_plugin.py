@@ -32,6 +32,9 @@ BASE = """## Right now
 
 **2026-09-30 19:10 [session OLD] — older entry.** body
 
+**2026-09-30 18:00 [session TIP] — closed task.** body
+status: done 2026-09-30
+
 **2026-09-28 13:20 [session $HERMES_SESSION_ID] — foreign literal.** body
 """
 
@@ -191,6 +194,7 @@ class Reinject(TmpHome):
         ctx = out["context"]
         self.assertIn("older entry", ctx)               # tagged OLD = lineage root
         self.assertNotIn("foreign literal", ctx)
+        self.assertNotIn("closed task", ctx)              # done entries are not "open"
         self.assertIn("OLD -> TIP", ctx)
         self.assertIn("after compaction", ctx)
         self.assertIsNone(self.turn("TIP", [{"role": "user", "content": LCM}]))  # unchanged -> silent

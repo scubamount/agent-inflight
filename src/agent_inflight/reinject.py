@@ -24,7 +24,7 @@ import hashlib
 import re
 from typing import Any, Iterable, List, Optional
 
-from . import core
+from . import core, progress
 
 MAX_BYTES = 6_000
 COMPACTION_RE = re.compile(
@@ -67,7 +67,11 @@ def decide(prev_sig: Optional[str], sig: str, is_first_turn: bool) -> Optional[s
 def owned(text: str, lineage: List[str]) -> List["core.Entry"]:
     rn = core.right_now(core.parse(text))
     ids = set(lineage)
-    return [e for e in rn.entries if e.session in ids] if rn else []
+    if not rn:
+        return []
+    # "open entries": a done entry is closed work; re-injecting it reads as a live task.
+    return [e for e in rn.entries
+            if e.session in ids and progress.lifecycle(e.text).state != "done"]
 
 
 def render(entries: List["core.Entry"], sid: str, lineage: List[str], reason: str,
