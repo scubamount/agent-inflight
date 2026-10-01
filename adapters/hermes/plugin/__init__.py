@@ -8,6 +8,11 @@ transform_tool_result if the file changed, rewrite literal `[session $VAR]`
                       report anything new. Only this hook can reach the model:
                       Hermes discards post_tool_call's return value.
 
+                      Also records the repo the call touched (session
+                      cwd, `workdir`, file `path`) in the session's hook
+                      state for `inflight audit`; one write per (session,
+                      repo) per minute.
+
 pre_llm_call          after a context compaction (or on a resumed session),
                       inject this session's OWN entries, scoped to its
                       compression lineage, into the user turn (6 KB cap).
@@ -36,7 +41,7 @@ _SRC = Path(os.path.realpath(__file__)).parents[3] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from agent_inflight import backends, core, entries, paths, reinject, retag, safety  # noqa: E402
+from agent_inflight import backends, core, entries, paths, reinject, retag, safety, state  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +118,59 @@ def on_pre_tool_call(tool_name: str = "", args: Any = None, tool_call_id: str = 
     return None  # observe only
 
 
+RECORD_EVERY_S = 60  # at most one state write per (session, repo) per minute
+_recorded: Dict[Tuple[str, str], float] = {}
+_RECORDED_MAX = 4096
+
+
+def _call_dirs(task_id: str, args: Any) -> List[str]:
+    """Where this call ran: the session's recorded terminal cwd (Hermes keeps it
+    per task), plus the structured `workdir` / file `path` arguments. Command
+    strings are never parsed."""
+    out: List[str] = []
+    try:
+        from tools.terminal_tool import get_session_cwd  # Hermes internal; absent -> skip
+        cwd = get_session_cwd(task_id or None)
+        if cwd:
+            out.append(cwd)
+    except Exception:
+        pass
+    if isinstance(args, dict):
+        if isinstance(args.get("workdir"), str):
+            out.append(args["workdir"])
+        p = args.get("path")
+        if isinstance(p, str) and p:
+            out.append(os.path.dirname(os.path.expanduser(p)) or ".")
+    return out
+
+
+def record_repos(session_id: str, task_id: str, args: Any) -> None:
+    """Record the repos this call touched in the session's hook state, so
+    `inflight audit` can attribute owed work to Hermes sessions too."""
+    if not state.valid_sid(session_id):
+        return
+    now = time.monotonic()
+    for d in _call_dirs(task_id, args):
+        repo = state.repo_root(d)
+        if not repo:
+            continue
+        key = (session_id, repo)
+        with _lock:
+            if now - _recorded.get(key, -RECORD_EVERY_S) < RECORD_EVERY_S:
+                continue
+            if len(_recorded) >= _RECORDED_MAX:
+                _recorded.clear()
+            _recorded[key] = now
+        state.update(session_id, repo=repo, harness="hermes")
+
+
 def on_transform_tool_result(tool_name: str = "", args: Any = None, result: Any = None,
-                             session_id: str = "", tool_call_id: str = "", **_: Any) -> Optional[str]:
+                             session_id: str = "", tool_call_id: str = "", task_id: str = "",
+                             **_: Any) -> Optional[str]:
+    try:
+        record_repos(session_id, task_id, args)
+    except Exception:
+        logger.debug("agent-inflight repo record failed", exc_info=True)
     with _lock:
         snap = _snapshots.pop(tool_call_id, None) if tool_call_id else None
     if snap is None or not isinstance(result, str):

@@ -75,7 +75,7 @@ cat > "$tmp" <<EOF
 #!/bin/sh
 # Written by agent-inflight install.sh; re-run it to regenerate.
 PY="$VENV/bin/python"
-[ -x "\$PY" ] || PY=python3
+[ -x "\$PY" ] || { echo "inflight: private venv missing (\$PY); using python3, backend plugins unavailable. Re-run install.sh." >&2; PY=python3; }
 exec "\$PY" "$HERE/bin/inflight" "\$@"
 EOF
 chmod 755 "$tmp"

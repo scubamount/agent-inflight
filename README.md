@@ -81,6 +81,7 @@ Then wire your agent:
 | `inflight trim [--apply]` | Pause active entries untouched for `INFLIGHT_STALE_DAYS`; archive done entries after a day; then, over budget, archive done → paused → active (oldest first). Active entries are never archived for age. Dry run by default; lists every pause/archive. |
 | `inflight check` | Lint: missing section, duplicate `## Right now`, over budget, undated entries, unexpanded `$VAR` tags, credential-looking text, tracker readable by others. Exit 1 on findings. |
 | `inflight path` | Print the resolved tracker path. |
+| `inflight audit [--apply] [--catch-up] [--json]` | Owed git work (uncommitted, unpushed, branch without upstream, stash) per session. Repos come from hook state (recorded per session) plus the scan roots in `inflight-state/config.json` (`audit.roots`, default `[{"path": "~/code", "depth": 3}]`). A repo whose last recorder ENDED (or went idle past `--stale-min`, default 120) gets one entry per (session, repo), tagged with that session and updated in place on re-runs; clean again → marked done, never deleted. Repos an ACTIVE session recorded are skipped. Scan-root repos no session recorded are listed as **unowned** and never written. Dry run by default. `--catch-up` = recorded repos only (what `session-start` and the cron run). |
 | `inflight hook <event>` | Hook protocol v1: one JSON object on stdin, always exit 0. See [docs/hook-protocol.md](docs/hook-protocol.md). |
 | `inflight plugin list\|enable\|disable <name>` | Allowlist for backend plugins (entry points). Nothing is imported until enabled; every change is logged to `hooks.log`. |
 
@@ -160,6 +161,15 @@ Without a backend the command still lists every tagged entry with status
   with passwords) and names only the kind, never the value. `--force` for a
   false positive. `check` reports matching entries by id.
 - **Read-only session lookups.** `state.db` is opened with `mode=ro`.
+- **Audit can't run repo code.** Every git call goes through `safe_git()`:
+  read-only subcommands only, 5 s timeout, `core.fsmonitor=false`,
+  `core.hooksPath=/dev/null`, and every filter driver the repo itself defines
+  (`.git/config`, `include.path`) blanked on the command line, because a
+  repo-local clean filter runs during a plain `git status`. A hostile-repo
+  fixture test (fsmonitor, clean/process filters, include.path, hooks) proves
+  no marker is written, and a control arm proves plain git would write them.
+- **Catch-up never claims work.** Audit entries carry the dead session's tag.
+  Taking one over (`(took over <id>)`) is always an explicit act.
 
 ## Security
 

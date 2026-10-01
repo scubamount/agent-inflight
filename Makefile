@@ -8,6 +8,7 @@ test:
 	env -u PYTHONPATH $(PY) tests/test_hermes_plugin.py
 	env -u PYTHONPATH $(PY) tests/test_derived.py
 	env -u PYTHONPATH $(PY) tests/test_hooks.py
+	env -u PYTHONPATH $(PY) tests/test_audit.py
 
 check: test
 	sh -n install.sh

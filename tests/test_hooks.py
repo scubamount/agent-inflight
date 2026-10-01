@@ -345,6 +345,12 @@ class Install(unittest.TestCase):
             self.assertIn("ok venv", p2.stdout)
             self.assertIn("ok launcher", p2.stdout)
             self.assertIn("(up to date)", p2.stdout)
+            # missing venv: launcher still runs, and says so on stderr (never silently)
+            shutil.rmtree(st / "venv")
+            p = subprocess.run([str(home / "bin" / "inflight"), "path"], env=env, capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("private venv missing", p.stderr)
+            self.assertEqual(p.stdout.count("\n"), 1)  # stdout stays machine-clean
 
 
 if __name__ == "__main__":

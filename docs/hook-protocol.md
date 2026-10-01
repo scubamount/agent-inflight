@@ -18,7 +18,7 @@ inflight hook <event>   < one JSON object on stdin
 
 | Event | Payload | Effect | stdout |
 |---|---|---|---|
-| `session-start` | `session_id, cwd, source` (`new`, `startup`, `resume`, `compact` or `clear`), optional `harness` | Records the session and clears any ended flag. Records `cwd`'s repo. | On `resume`/`compact`: the session's own open entries, as the same "verify on disk" block the Hermes plugin injects |
+| `session-start` | `session_id, cwd, source` (`new`, `startup`, `resume`, `compact` or `clear`), optional `harness` | Records the session and clears any ended flag. Records `cwd`'s repo. On `new`/`startup`: runs the audit catch-up (recorded repos of ENDED sessions only, built-in backends only, about 3 s budget, at most every 10 min; writes `## Right now` entries tagged with the dead session). | On `resume`/`compact`: the session's own open entries, as the same "verify on disk" block the Hermes plugin injects |
 | `pre-tool` | `session_id, cwd, tool, call_id` | Heartbeat | A collision warning, once per (session, repo), when another session with a heartbeat in the last 15 min touched the same repo |
 | `post-tool` | `session_id, cwd, tool, call_id` | Heartbeat. Records `cwd`'s repo as touched | none |
 | `cwd-changed` | `session_id, cwd` | Heartbeat. Records the repo | none |

@@ -1,7 +1,7 @@
 ---
 name: inflight-tracker
 description: Shared cross-session work tracker; read at start, update at end.
-version: 0.3.0
+version: 0.4.0
 author: scubamount, Hermes Agent
 license: Proprietary
 platforms: [linux, macos]
@@ -36,6 +36,7 @@ inflight sessions                     # owner + ACTIVE/IDLE/ENDED + progress per
 inflight sessions --children          # + delegated subagent sessions (resume handles)
 inflight hook <event> < payload.json  # harness hooks (docs/hook-protocol.md); always exit 0
 inflight plugin list                  # backend plugins; `enable <name>` to allowlist
+inflight audit                        # owed git work per session (dry run); --apply writes catch-up entries
 inflight me                           # this session's tag
 inflight add "<thing>: <state>" "<not done; next step; who decides>"
 inflight check                        # lint; exit 1 on findings
@@ -58,6 +59,11 @@ inflight trim                         # dry run; --apply pauses stale, archives 
    | UNKNOWN / NO-BACKEND | treat as unowned; verify on disk before trusting it |
 4. Treat every entry as a hypothesis. Confirm named commits/files/services on
    disk before planning on them; an entry can lag reality by hours.
+5. `— audit: <repo>: owed work.` entries were written by `inflight audit`
+   for a session that ended with uncommitted/unpushed/stashed work. They stay
+   tagged with the dead session. To pick one up, verify on disk, append
+   `(took over <old-id>)`, and finish it; audit marks it done by itself once
+   the repo is clean. Audit never writes `took over`.
 
 Don't recite the tracker back to the user. Use it.
 

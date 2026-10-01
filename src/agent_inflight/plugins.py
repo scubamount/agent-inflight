@@ -9,8 +9,8 @@ Nothing it ships is imported until the user runs
 `inflight plugin enable mybackend`. The allowlist lives in
 <tracker dir>/inflight-state/config.json (0600); every enable/disable goes to
 hooks.log. Plugins load lazily: only commands that need session status
-(`sessions`, `trim`, audit) call load_backends(); `add`, `done`, `check` and
-the hook fast path never do.
+(`sessions`, `trim`, `audit`) call load_backends(); `add`, `done`, `check`,
+the hook fast path and the audit catch-up it triggers never do.
 
 The entry point must resolve to a class (instantiated with no arguments) or an
 object with the backend contract in backends.py. Its module may set

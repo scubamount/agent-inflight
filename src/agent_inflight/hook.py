@@ -6,8 +6,10 @@ Exit status is ALWAYS 0: in Claude Code, exit 2 from a PreToolUse hook blocks
 the tool, so any error is logged to hooks.log and swallowed (fail open).
 
   session-start {session_id, cwd, source: new|startup|resume|compact|clear}
-      records the session; on resume/compact prints the session's own open
-      entries (same block as the Hermes re-inject)
+      records the session; on new/startup runs the audit catch-up for ENDED
+      sessions (recorded repos only, ~3 s budget, at most every 10 min); on
+      resume/compact prints the session's own open entries (same block as
+      the Hermes re-inject)
   pre-tool      {session_id, cwd, tool, call_id}
       heartbeat; prints a collision warning, once per (session, repo), when
       another session with a heartbeat in the last ACTIVE window has touched
@@ -91,6 +93,9 @@ def handle(event: str, payload: Dict[str, Any]) -> str:
         if isinstance(harness, str) and harness:
             fields["harness"] = harness[:40]
         state.update(sid, repo=repo, **fields)
+        if source in ("new", "startup"):
+            from . import audit
+            audit.catch_up()  # bounded, rate-limited, never raises; writes only for DEAD sessions
         if source not in ("resume", "compact"):
             return ""
         from . import reinject

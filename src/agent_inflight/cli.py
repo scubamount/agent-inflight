@@ -18,6 +18,8 @@ USAGE = f"""inflight {__version__} — shared work tracker for agent sessions
   inflight trim [--apply]       pause stale entries; archive done + over-budget ones
   inflight check                lint (exit 1 on findings)
   inflight path                 print the resolved file path
+  inflight audit [--apply] [--catch-up] [--json]
+                                owed git work per session (dry run by default)
   inflight hook <event>         hook protocol v1: JSON on stdin, always exit 0
   inflight plugin list|enable|disable <name>
                                 allowlist for backend plugins (entry points)
@@ -35,6 +37,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if cmd == "plugin":
         from . import plugins
         return plugins.main(argv)
+    if cmd == "audit":
+        from . import audit
+        return audit.main(argv)
     from . import entries, sessions, trim
     table = {
         "init": entries.init_main,
