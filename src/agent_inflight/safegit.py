@@ -23,6 +23,11 @@ GIT_CEILING_DIRECTORIES=<parent> (a broken .git never climbs into a parent
 repo), GIT_* from the caller scrubbed. Filters defined in global/system config
 (git-lfs) are the user's own and stay, so LFS status stays correct.
 
+`status` always runs with --ignore-submodules=all: git status recurses into
+each submodule and runs git there with the submodule's own config, which
+these -c pairs don't cover (measured: a filter in the submodule's config ran
+through 0.4.0's safe_git). Submodules are audited as their own repos.
+
 Only the subcommands in READ_ONLY run, each with a 5 s timeout, and `cwd`
 must be an existing directory that contains `.git`.
 """
@@ -100,6 +105,12 @@ def safe_git(cwd: "str | os.PathLike[str]", *args: str, timeout: float = TIMEOUT
         raise GitError(f"refused: {args[0] if args else '(none)'} is not a read-only subcommand")
     repo = _check_repo(cwd)
     neutral = neutralizers(repo, timeout) if neutral is None else neutral
+    if args[0] == "status":
+        # status recurses into submodules and runs git there with the
+        # SUBMODULE's config: our -c pairs and neutralizers() cover only this
+        # repo, so a submodule's own filter would run. Never recurse; a
+        # submodule is audited as its own repo when found or recorded.
+        args = ("status", "--ignore-submodules=all", *[a for a in args[1:] if not a.startswith("--ignore-submodules")])
     p = _run(repo, [*BASE, *neutral, *args], timeout)
     if p.returncode != 0:
         msg = p.stderr.decode("utf-8", "replace").strip().splitlines()

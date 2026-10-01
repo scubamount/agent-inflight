@@ -28,6 +28,7 @@ Dry run is the default; nothing is written without --apply.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -63,6 +64,15 @@ def roots() -> List[Tuple[Path, int]]:
     return out
 
 
+def ignore_branches() -> List[str]:
+    """Opt-in glob patterns (config.json audit.ignore_branches); empty by default.
+    `inflight check` lists them so nothing is hidden silently."""
+    from . import plugins
+    cfg = plugins._load_config().get("audit", {})
+    v = cfg.get("ignore_branches", []) if isinstance(cfg, dict) else []
+    return [p for p in v if isinstance(p, str) and p] if isinstance(v, list) else []
+
+
 def scan(root: Path, depth: int) -> Iterator[Path]:
     """Directories holding `.git` under root, down to `depth` levels. Does not
     descend into a repo once found. Filesystem only, no git."""
@@ -95,7 +105,8 @@ def scan(root: Path, depth: int) -> Iterator[Path]:
 @dataclass
 class RepoState:
     repo: str
-    findings: List[str] = field(default_factory=list)
+    findings: List[str] = field(default_factory=list)  # owed work
+    notes: List[str] = field(default_factory=list)     # informational, never owed
     error: Optional[str] = None
 
     @property
@@ -121,19 +132,22 @@ def inspect(repo: str, timeout: float = 5.0) -> RepoState:
             rs.findings.append("uncommitted: " + ", ".join(p for p in parts if p))
         has_remote = bool(g("for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes").strip())
         if has_remote:
+            ignore = ignore_branches()
             for line in g("for-each-ref", "--format=%(refname:short)\t%(upstream)\t%(upstream:track)",
                           "refs/heads").splitlines():
                 name, upstream, track = (line.split("\t") + ["", ""])[:3]
-                if not name:
+                if not name or any(fnmatch.fnmatchcase(name, pat) for pat in ignore):
                     continue
-                if upstream:
-                    if "ahead" in track:
-                        n = track.split("ahead", 1)[1].split(",")[0].strip(" ]")
-                        rs.findings.append(f"{n} unpushed commit(s) on {_redact(name)}")
-                    continue
+                # Unpushed = on NO remote-tracking ref. Ahead-of-upstream alone overcounts
+                # when the upstream ref is stale but the commits are on another remote.
                 n = g("rev-list", "--count", f"refs/heads/{name}", "--not", "--remotes").strip()
                 if n and n != "0":
-                    rs.findings.append(f"{n} unpushed commit(s) on {_redact(name)} (no upstream)")
+                    rs.findings.append(f"{n} unpushed commit(s) on {_redact(name)}"
+                                       + ("" if upstream else " (no upstream)"))
+                elif upstream and "ahead" in track:
+                    ahead = track.split("ahead", 1)[1].split(",")[0].strip(" ]")
+                    rs.notes.append(f"{_redact(name)}: {ahead} ahead of {upstream.replace('refs/remotes/', '')}, "
+                                    "all on another remote (upstream ref stale; `git fetch` to refresh)")
         if g("for-each-ref", "--format=%(refname)", "refs/stash").strip():
             n = g("rev-list", "--walk-reflogs", "--count", "refs/stash").strip()
             rs.findings.append(f"{n} stash entr{'y' if n == '1' else 'ies'}")
@@ -179,13 +193,15 @@ class Plan:
     resolved: List[str] = field(default_factory=list)                        # repos now clean
     resolved_ids: set = field(default_factory=set)                           # audit entry ids to close
     truncated: bool = False                                                  # hit the deadline
+    noted: List[RepoState] = field(default_factory=list)                     # clean, with notes
 
     def as_dict(self) -> Dict[str, Any]:
         return {"catch_up": [{"session": s, "repo": r.repo, "findings": r.findings, "status": st}
                              for s, r, st in self.catch_up],
                 "in_use": [{"repo": r, "session": s} for r, s in self.in_use],
                 "waiting": [{"repo": r, "session": s} for r, s in self.waiting],
-                "unowned": [{"repo": r.repo, "findings": r.findings} for r in self.unowned],
+                "unowned": [{"repo": r.repo, "findings": r.findings, "notes": r.notes} for r in self.unowned],
+                "notes": [{"repo": r.repo, "notes": r.notes} for r in self.noted],
                 "clean": self.clean, "errors": [{"repo": r.repo, "error": r.error} for r in self.errors],
                 "resolved": self.resolved, "truncated": self.truncated}
 
@@ -241,6 +257,8 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
             plan.unowned.append(rs)
         else:
             plan.clean += 1
+        if rs.notes and not rs.owed:
+            plan.noted.append(rs)
     return plan
 
 
@@ -334,7 +352,7 @@ def catch_up(budget_s: float = 3.0, min_interval_s: float = 600.0) -> Optional[D
         # A session only a plugin knows is UNKNOWN here, so it is never written.
         plan = build(use_roots=False, deadline=time.monotonic() + budget_s,
                      be=backends.chain(plugins=False) or False)
-        if not plan.catch_up and not plan.resolved_ids:
+        if not plan.catch_up and not plan.resolved_ids:  # nothing to write: skip the lock
             return {}
         return apply(plan, paths.inflight_file().expanduser())
     except Exception as e:  # catch-up must never break a hook or the cron
@@ -362,6 +380,13 @@ def _print(plan: Plan, apply_mode: bool) -> None:
     print(f"\nunowned (scan roots, no recorded session; listed only, never written): {len(plan.unowned)}")
     for rs in plan.unowned:
         print(f"  {_short(rs.repo)}: " + "; ".join(rs.findings))
+        for n in rs.notes:
+            print(f"      note: {n}")
+    if plan.noted:
+        print(f"\nnotes (not owed work): {len(plan.noted)}")
+        for rs in plan.noted:
+            for n in rs.notes:
+                print(f"  {_short(rs.repo)}: {n}")
     if plan.errors:
         print(f"\nskipped on error: {len(plan.errors)}")
         for rs in plan.errors:
@@ -377,6 +402,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Owed git work per session. Dry run unless --apply. Exit 0 always on a completed "
                     "audit (findings are not errors).")
     ap.add_argument("--apply", action="store_true", help="write catch-up entries / mark resolved ones done")
+    ap.add_argument("--dry-run", action="store_true", help="the default; accepted for clarity (overrides --apply)")
     ap.add_argument("--catch-up", action="store_true",
                     help="recorded repos only (skip the scan roots): the session-start / cron path")
     ap.add_argument("--stale-min", type=int, default=paths.env_int("INFLIGHT_STALE_MIN", STALE_MIN),
@@ -384,6 +410,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--file", type=Path, default=None)
     args = ap.parse_args(argv)
+    if args.dry_run:
+        args.apply = False
     plan = build(args.stale_min, use_roots=not args.catch_up)
     counts = None
     if args.apply:

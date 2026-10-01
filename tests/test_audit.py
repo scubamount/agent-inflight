@@ -159,6 +159,45 @@ class SafeGit(World):
         for m in ("clean", "process", "include"):
             self.assertIn(m, self.marks_now())
 
+    def hostile_submodule(self):
+        """Clean outer repo; the submodule's OWN config defines a clean filter."""
+        sub = mkrepo(self.t / "subsrc")
+        top = mkrepo(self.code / "outer", self.remote)
+        git(top, "-c", "protocol.file.allow=always", "submodule", "-q", "add", str(sub), "sub")
+        git(top, "commit", "-qm", "add sub")
+        s = self.t / "subclean.sh"
+        s.write_text(f"#!/bin/sh\ntouch {self.marks}/subclean\ncat\n")
+        s.chmod(0o755)
+        inner = top / "sub"
+        (inner / ".gitattributes").write_text("*.txt filter=evil\n")
+        git(inner, "config", "filter.evil.clean", str(s))
+        (inner / "a.txt").write_text("A\n")  # same size: forces content hashing
+        for m in self.marks.iterdir():
+            m.unlink()
+        return top, inner
+
+    def test_hostile_submodule_runs_nothing(self):
+        top, _ = self.hostile_submodule()
+        safegit.safe_git(top, "status", "--porcelain")  # caller forgot --ignore-submodules
+        rs = audit.inspect(str(top))
+        self.assertIsNone(rs.error)
+        self.assertEqual(self.marks_now(), [], "submodule config executed during audit")
+
+    def test_plain_git_runs_the_submodule_filter(self):
+        """Control: plain status (and 0.4.0's flags without --ignore-submodules) run it."""
+        top, _ = self.hostile_submodule()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        subprocess.run(["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "status",
+                        "--porcelain"], cwd=str(top), env=env, capture_output=True, timeout=30)
+        self.assertIn("subclean", self.marks_now())
+
+    def test_submodule_audited_as_its_own_repo_safely(self):
+        _, inner = self.hostile_submodule()
+        rs = audit.inspect(str(inner))  # .git is a file in a submodule; still a repo
+        self.assertIsNone(rs.error)
+        self.assertTrue(any(f.startswith("uncommitted") for f in rs.findings), rs.findings)
+        self.assertEqual(self.marks_now(), [])
+
     def test_refuses_write_subcommands_and_non_repos(self):
         r = mkrepo(self.code / "r")
         for bad in (("commit", "-m", "x"), ("checkout", "main"), ("config", "x.y", "z"), ("gc",), ()):
@@ -254,6 +293,58 @@ class Classify(World):
         self.session("idle-1", [r], idle_s=3 * 3600)
         plan = audit.build(stale_min=120)
         self.assertEqual([s for s, _, _ in plan.catch_up], ["idle-1"])
+
+
+class Unpushed(World):
+    def test_stale_upstream_is_a_note_not_owed_work(self):
+        """hermes-agent-fork shape: main tracks origin (stale) but every commit is on `upstream`."""
+        src = mkrepo(self.code / "src", self.remote)
+        for i in range(3):
+            (src / f"f{i}").write_text(str(i))
+            git(src, "add", "-A")
+            git(src, "commit", "-qm", f"c{i}")
+        up = self.remote / "upstream.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(up)], check=True)
+        git(src, "remote", "add", "upstream", str(up))
+        git(src, "push", "-q", "upstream", "HEAD:main")
+        git(src, "fetch", "-q", "upstream")
+        rs = audit.inspect(str(src))
+        self.assertEqual(rs.findings, [], rs.findings)
+        self.assertEqual(len(rs.notes), 1)
+        self.assertIn("3 ahead of origin/main", rs.notes[0])
+        self.assertIn("upstream ref stale", rs.notes[0])
+        (src / "g").write_text("g")
+        git(src, "add", "-A")
+        git(src, "commit", "-qm", "really local")
+        rs = audit.inspect(str(src))
+        self.assertEqual(rs.findings, ["1 unpushed commit(s) on main"])
+
+    def test_ignore_branches_opt_in_and_listed_by_check(self):
+        r = mkrepo(self.code / "r", self.remote)
+        git(r, "checkout", "-q", "-b", "backup/old")
+        (r / "x").write_text("x")
+        git(r, "add", "-A")
+        git(r, "commit", "-qm", "x")
+        self.assertTrue(any("backup/old" in f for f in audit.inspect(str(r)).findings))  # default: shown
+        self.root_cfg([{"path": str(self.code)}])
+        cfg = json.loads((state.state_dir() / "config.json").read_text())
+        cfg["audit"]["ignore_branches"] = ["backup/*"]
+        (state.state_dir() / "config.json").write_text(json.dumps(cfg))
+        self.assertEqual(audit.inspect(str(r)).findings, [])
+        p = subprocess.run([sys.executable, str(BIN), "check"], capture_output=True, text=True,
+                           env={**os.environ}, timeout=60)
+        self.assertIn("audit.ignore_branches hides branches matching: backup/*", p.stdout)
+
+    def test_dry_run_flag_is_accepted_and_wins(self):
+        r = mkrepo(self.code / "p", self.remote)
+        (r / "a.txt").write_text("d\n")
+        self.session("dead-1", [r], ended=True)
+        before = self.tracker.read_bytes()
+        p = subprocess.run([sys.executable, str(BIN), "audit", "--dry-run", "--apply"], capture_output=True,
+                           text=True, env={**os.environ}, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("dry run: nothing written", p.stdout)
+        self.assertEqual(self.tracker.read_bytes(), before)
 
 
 class Apply(World):
