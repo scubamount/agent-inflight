@@ -32,7 +32,8 @@ and whether it is still running, and trims the file so it stays cheap to load.
 
 ```bash
 inflight path                         # which file
-inflight sessions                     # owner + ACTIVE/IDLE/ENDED per entry
+inflight sessions                     # owner + ACTIVE/IDLE/ENDED + progress per entry
+inflight sessions --children          # + delegated subagent sessions (resume handles)
 inflight me                           # this session's tag
 inflight add "<thing>: <state>" "<not done; next step; who decides>"
 inflight check                        # lint; exit 1 on findings
@@ -75,6 +76,8 @@ Don't recite the tracker back to the user. Use it.
 - Headline: thing + state, e.g. `consent-gate v2: committed, NOT pushed.`
 - What did NOT land: unpushed, unrestarted, unverified, waiting on a human.
 - The next concrete step and the handle (SHA, path, PR, process id).
+  Subagent session ids need not be typed: `inflight sessions --children`
+  derives them from the session backend.
 - One paragraph. Long analysis goes in a file; link the path.
 - Multi-step work: optional checkbox lines under the head (`- [ ]` open,
   `- [x]` done, `- [~]` blocked + why). `inflight sessions` derives

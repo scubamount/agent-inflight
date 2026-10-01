@@ -95,5 +95,44 @@ class SessionsProgress(unittest.TestCase):
             self.assertIn("progress 1/3 (1 blocked)", out)
 
 
+class Children(unittest.TestCase):
+    def test_children_exclude_compression_continuation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            now = time.time()
+            state_db(home / "state.db", [
+                ("P", "parent", now - 900, now - 500, "compression", now - 500, None, "tui"),
+                ("SUB1", "Subagent: a", now - 800, now - 700, "agent_close", now - 700, "P", "subagent"),
+                ("C", "parent #2", now - 500, None, None, now - 10, "P", "tui"),
+                ("SUB2", "Subagent: b", now - 400, None, None, now - 20, "C", "desktop"),
+                ("X", "other", now - 300, None, None, now - 5, None, "tui"),
+            ])
+            (home / "inflight.md").write_text("## Right now\n\n**2026-09-30 [session P] — work.** p\n")
+            rc, out = run(home, "sessions", "--json", "--children")
+            row = json.loads(out)["entries"][0]
+            self.assertEqual(row["continued_as"], "C")
+            self.assertEqual([k["id"] for k in row["children"]], ["SUB2", "SUB1"])
+            rc, out = run(home, "sessions", "--json")
+            self.assertNotIn("children", json.loads(out)["entries"][0])
+            rc, out = run(home, "sessions", "--children")
+            self.assertIn("kids  : 2 delegated", out)
+            self.assertIn("ENDED   SUB1", out)
+
+    def test_continuation_picks_post_end_child_not_latest_subagent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            now = time.time()
+            state_db(home / "state.db", [
+                ("P", "p", now - 900, now - 500, "compression", now - 500, None, "tui"),
+                ("C", "p #2", now - 500, None, None, now - 10, "P", "tui"),
+                ("LATE", "Subagent: late", now - 499.5 - 2, None, None, now - 1, "P", "subagent"),
+            ])
+            (home / "inflight.md").write_text("## Right now\n\n**2026-09-30 [session P] — w.**\n")
+            rc, out = run(home, "sessions", "--json", "--children")
+            row = json.loads(out)["entries"][0]
+            self.assertEqual(row["continued_as"], "C")
+            self.assertEqual([k["id"] for k in row["children"]], ["LATE"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
