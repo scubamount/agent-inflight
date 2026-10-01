@@ -1,6 +1,6 @@
 # Hook protocol (version 1)
 
-`HOOK_PROTOCOL_VERSION = 1` (`src/agent_inflight/hook.py`). This is the main public interface. Any harness that can run a command on lifecycle events can use agent-inflight, with no Python plugin needed.
+`HOOK_PROTOCOL_VERSION = 1` (`src/agent_inflight/hook.py`). This is the main public interface. Any harness that can run a command on lifecycle events can use agent-inflight, with no Python plugin needed. How to wire a new harness, and when a backend plugin is worth writing: [extending.md](extending.md).
 
 ```text
 inflight hook <event>   < one JSON object on stdin

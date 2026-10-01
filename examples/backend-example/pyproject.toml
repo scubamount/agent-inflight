@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-inflight-backend-example"
+version = "0.1.0"
+description = "Worked example of an agent-inflight session backend: reads a harness's sessions.json"
+requires-python = ">=3.9"
+# No runtime dependencies. The backend does not import agent_inflight: the
+# contract is duck-typed (see src/agent_inflight/backends.py in agent-inflight).
+
+[project.entry-points."agent_inflight.backends"]
+example = "inflight_backend_example:Backend"
+
+[tool.setuptools]
+packages = ["inflight_backend_example"]
+package-dir = {"" = "src"}
