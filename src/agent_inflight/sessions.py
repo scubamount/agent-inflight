@@ -90,6 +90,23 @@ class HermesBackend:
                             "order by c.started_at desc limit 1", (sid, cls._CONT_SLACK_S))
         return row[0][0] if row else None
 
+    def lineage(self, sid: str, max_hops: int = 50) -> List[str]:
+        """Compression ancestors of `sid`, root first, ending with `sid`. A parent
+        counts only if it ended by compression and `sid` started at/after that
+        end (a continuation); delegation parents are not lineage."""
+        info = self._one(sid)
+        if not info:
+            return [sid]
+        db, chain = info["_db"], [sid]
+        while len(chain) < max_hops:
+            row = self._rows(db, "select p.id from sessions c join sessions p on c.parent_session_id = p.id "
+                                 "where c.id = ? and p.end_reason = 'compression' "
+                                 "and c.started_at >= coalesce(p.ended_at, 0) - ?", (chain[0], self._CONT_SLACK_S))
+            if not row or row[0][0] in chain:
+                break
+            chain.insert(0, row[0][0])
+        return chain
+
     def children(self, sid: str, limit: int = 50) -> List[dict]:
         """Delegation children of `sid` and of every compression continuation
         after it (the same conversation), newest first. Read-only."""

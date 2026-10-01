@@ -151,7 +151,83 @@ class RetagPlugin(TmpHome):
             def register_hook(self, name, fn):
                 got.append(name)
         self.p.register(Ctx())
-        self.assertEqual(got, ["pre_tool_call", "transform_tool_result"])
+        self.assertEqual(got, ["pre_tool_call", "transform_tool_result", "pre_llm_call"])
+
+
+def _db(home: Path, rows):
+    con = sqlite3.connect(home / "state.db")
+    con.execute("create table sessions (id text, title text, started_at real, ended_at real, end_reason text, "
+                "last_activity_at real, parent_session_id text)")
+    con.executemany("insert into sessions values (?,?,?,?,?,?,?)", rows)
+    con.commit()
+    con.close()
+
+
+LCM = "[Recent Summary (d0, node 12)]\nstuff\n[Expand for details: h]"
+
+
+class Reinject(TmpHome):
+    def setUp(self):
+        super().setUp()
+        now = time.time()
+        _db(self.home, [("OLD", "a", now - 900, now - 500, "compression", now - 500, None),
+                        ("TIP", "a #2", now - 500, None, None, now - 5, "OLD"),
+                        ("SUB", "Subagent", now - 450, None, None, now - 5, "TIP"),
+                        ("NEW", "b", now - 10, None, None, now - 1, None)])
+
+    def turn(self, sid, hist, first=False):
+        return self.p.on_pre_llm_call(session_id=sid, conversation_history=hist, is_first_turn=first)
+
+    def test_lineage_compression_only(self):
+        from agent_inflight import sessions
+        be = sessions.backend(self.home)
+        self.assertEqual(be.lineage("TIP"), ["OLD", "TIP"])
+        self.assertEqual(be.lineage("SUB"), ["SUB"])  # delegation parent is not lineage
+
+    def test_inject_once_after_lcm_compaction_owned_only(self):
+        self.assertIsNone(self.turn("TIP", [], first=True))  # conversation's first turn
+        out = self.turn("TIP", [{"role": "user", "content": LCM}])
+        self.assertIsNotNone(out)
+        ctx = out["context"]
+        self.assertIn("older entry", ctx)               # tagged OLD = lineage root
+        self.assertNotIn("foreign literal", ctx)
+        self.assertIn("OLD -> TIP", ctx)
+        self.assertIn("after compaction", ctx)
+        self.assertIsNone(self.turn("TIP", [{"role": "user", "content": LCM}]))  # unchanged -> silent
+
+    def test_list_content_markers_seen(self):
+        self.turn("TIP", [], first=True)
+        out = self.turn("TIP", [{"role": "user", "content": [{"type": "text", "text": LCM}]}])
+        self.assertIsNotNone(out)
+
+    def test_fresh_first_turn_silent(self):
+        self.assertIsNone(self.turn("NEW", [], first=True))
+
+    def test_resumed_session_injects(self):
+        out = self.turn("TIP", [{"role": "user", "content": "earlier"}], first=False)
+        self.assertIn("after resumed", out["context"])
+
+    def test_subagent_gets_nothing(self):
+        self.assertIsNone(self.turn("SUB", [{"role": "user", "content": LCM}]))
+
+    def test_opt_out(self):
+        os.environ["INFLIGHT_REINJECT"] = "0"
+        try:
+            self.assertIsNone(self.turn("TIP", [{"role": "user", "content": "x"}]))
+        finally:
+            os.environ.pop("INFLIGHT_REINJECT")
+
+    def test_cap(self):
+        from agent_inflight import reinject
+        big = [core.Entry(f"**2026-09-30 [session TIP] — e{i}.** " + "x" * 3000) for i in range(5)]
+        out = reinject.render(big, "TIP", ["TIP"], "compaction")
+        self.assertLessEqual(len(out.encode()), reinject.MAX_BYTES + 200)
+        self.assertIn("omitted for size", out)
+
+    def test_signature_for_builtin_compressor(self):
+        from agent_inflight import reinject
+        a = reinject.compaction_signature([{"role": "user", "content": "[CONTEXT COMPACTION — REFERENCE ONLY] x"}])
+        self.assertNotEqual(a, reinject.compaction_signature([]))
 
 
 class RetagPure(unittest.TestCase):

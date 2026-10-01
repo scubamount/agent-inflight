@@ -8,6 +8,11 @@ transform_tool_result if the file changed, rewrite literal `[session $VAR]`
                       report anything new. Only this hook can reach the model:
                       Hermes discards post_tool_call's return value.
 
+pre_llm_call          after a context compaction (or on a resumed session),
+                      inject this session's OWN entries, scoped to its
+                      compression lineage, into the user turn (6 KB cap).
+                      INFLIGHT_REINJECT=0 turns this off.
+
 The plugin makes no tool calls and no subprocesses, so it cannot re-enter the
 tool loop. Any error falls back to "change nothing" (fail open).
 """
@@ -27,7 +32,7 @@ _SRC = Path(os.path.realpath(__file__)).parents[3] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from agent_inflight import core, entries, paths, retag, trim  # noqa: E402
+from agent_inflight import core, entries, paths, reinject, retag, sessions, trim  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +144,44 @@ def on_transform_tool_result(tool_name: str = "", args: Any = None, result: Any 
         return None
 
 
+_seen_sig: Dict[str, str] = {}  # session_id -> last compaction signature seen this process
+_SEEN_MAX = 512
+
+
+def _lineage(sid: str) -> List[str]:
+    be = sessions.backend()
+    return be.lineage(sid) if be else [sid]
+
+
+def on_pre_llm_call(session_id: str = "", conversation_history: Any = None,
+                    is_first_turn: bool = False, **_: Any) -> Optional[Dict[str, str]]:
+    if not session_id or os.environ.get("INFLIGHT_REINJECT", "1") == "0":
+        return None
+    try:
+        sig = reinject.compaction_signature(conversation_history)
+        with _lock:
+            prev = _seen_sig.get(session_id)
+            if prev is None and len(_seen_sig) >= _SEEN_MAX:
+                _seen_sig.pop(next(iter(_seen_sig)))
+            _seen_sig[session_id] = sig
+        reason = reinject.decide(prev, sig, bool(is_first_turn))
+        if reason is None:
+            return None
+        try:
+            text = _target().read_text(encoding="utf-8")
+        except OSError:
+            return None
+        chain = _lineage(session_id)
+        mine = reinject.owned(text, chain)
+        if not mine:
+            return None
+        return {"context": reinject.render(mine, session_id, chain, reason)}
+    except Exception:
+        logger.debug("agent-inflight pre_llm_call failed", exc_info=True)
+        return None
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
     ctx.register_hook("transform_tool_result", on_transform_tool_result)
+    ctx.register_hook("pre_llm_call", on_pre_llm_call)

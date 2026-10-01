@@ -18,6 +18,12 @@
   `pre_tool_call` (observe only, never blocks) + `transform_tool_result`
   (the only hook whose return reaches the model). No tool calls, no
   subprocesses; any error leaves the result unchanged.
+  Also `pre_llm_call`: on the first turn after a context compaction
+  (hermes-lcm in-place summaries or the built-in compressor), or the first
+  turn of a resumed session, it injects THIS session's entries (tags in its
+  compression lineage; never a delegation parent's) into the user turn,
+  capped at 6 KB. Fresh sessions get nothing extra. `INFLIGHT_REINJECT=0`
+  turns it off.
 - status backend: `inflight sessions` reads `<hermes-home>/state.db` and
   `profiles/*/state.db` read-only, and follows compression children
 
