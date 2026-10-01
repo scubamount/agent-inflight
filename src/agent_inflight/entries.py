@@ -7,7 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import core, paths, progress, trim
+from . import core, paths, progress, safety, trim
 
 TEMPLATE = (Path(__file__).resolve().parent / "template.md")
 
@@ -21,7 +21,11 @@ def init_main(argv: Optional[List[str]] = None) -> int:
         print(f"{path} exists, left alone")
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8")
+    try:
+        safety.create_private(path, TEMPLATE.read_text(encoding="utf-8"))
+    except FileExistsError:
+        print(f"{path} exists, left alone")
+        return 0
     print(f"created {path}")
     return 0
 
@@ -35,6 +39,8 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("body", nargs="?", default="", help="optional detail after the headline")
     ap.add_argument("--file", type=Path, default=None)
     ap.add_argument("--session", default=None, help="override the session id")
+    ap.add_argument("--force", action="store_true",
+                    help="write even if the text looks like a credential (false positive)")
     args = ap.parse_args(argv)
 
     headline = args.headline
@@ -47,6 +53,15 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     headline = headline.strip().strip("*").strip()
     if not headline.endswith((".", "!", "?")):
         headline += "."
+    problems = safety.headline_problems(headline) + safety.body_problems(body or "")
+    if problems:
+        print("REFUSED: " + "; ".join(problems) + " (would forge or corrupt an entry)", file=sys.stderr)
+        return 4
+    kinds = safety.secret_kinds(f"{headline}\n{body or ''}")
+    if kinds and not args.force:
+        print(f"REFUSED: text looks like a credential ({', '.join(kinds)}). Never put secrets in the "
+              "tracker; rotate it if real. False positive: re-run with --force.", file=sys.stderr)
+        return 5
 
     path = (args.file or paths.inflight_file()).expanduser()
     if not path.exists():
@@ -54,23 +69,33 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     sid = args.session if args.session is not None else paths.session_id()
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    before = path.stat()
-    sections = core.parse(path.read_text(encoding="utf-8"))
-    taken = {e.id for s in sections for e in s.entries if e.id}
-    eid = core.new_id(f"{stamp}|{sid}|{headline}|{body}", taken)
-    tag = f" [session {sid} #{eid}]" if sid else f" [#{eid}]"
-    entry = core.Entry(f"**{stamp}{tag} — {headline}**" + (f" {body.strip()}" if body.strip() else ""))
-    rn = core.right_now(sections)
-    if rn is None:
-        rn = core.Section(core.RIGHT_NOW)
-        idx = 1 if sections and sections[0].header == "" else 0
-        sections.insert(idx, rn)
-    rn.entries.insert(0, entry)
-    now = path.stat()
-    if (now.st_mtime_ns, now.st_size) != (before.st_mtime_ns, before.st_size):
-        print("REFUSED: file changed while writing; re-run", file=sys.stderr)
+    # Prepending doesn't depend on what's below, so a write that races us
+    # (an editor that ignores the lock) is retried, not refused.
+    try:
+        with safety.locked(path):
+            for _attempt in range(3):
+                before = path.stat()
+                sections = core.parse(path.read_text(encoding="utf-8"))
+                taken = {e.id for s in sections for e in s.entries if e.id}
+                eid = core.new_id(f"{stamp}|{sid}|{headline}|{body}", taken)
+                tag = f" [session {sid} #{eid}]" if sid else f" [#{eid}]"
+                entry = core.Entry(f"**{stamp}{tag} — {headline}**" + (f" {body.strip()}" if body.strip() else ""))
+                rn = core.right_now(sections)
+                if rn is None:
+                    rn = core.Section(core.RIGHT_NOW)
+                    idx = 1 if sections and sections[0].header == "" else 0
+                    sections.insert(idx, rn)
+                rn.entries.insert(0, entry)
+                now = path.stat()
+                if (now.st_mtime_ns, now.st_size) == (before.st_mtime_ns, before.st_size):
+                    safety.write_private(path, core.render(sections))
+                    break
+            else:
+                print("REFUSED: file kept changing while writing; re-run", file=sys.stderr)
+                return 3
+    except safety.LockTimeout as e:
+        print(f"REFUSED: {e}; re-run", file=sys.stderr)
         return 3
-    trim.atomic_write(path, core.render(sections))
     print(f"added to {path}: {entry.head[:120]}")
     if not sid:
         print("note: untagged (no session id in env); `inflight sessions` cannot track it")
@@ -104,6 +129,15 @@ def done_main(argv: Optional[List[str]] = None) -> int:
     if not path.is_file():
         print(f"{path} not found (run `inflight init`)", file=sys.stderr)
         return 1
+    try:
+        with safety.locked(path):
+            return _done_locked(path, args)
+    except safety.LockTimeout as e:
+        print(f"REFUSED: {e}; re-run", file=sys.stderr)
+        return 3
+
+
+def _done_locked(path: Path, args: argparse.Namespace) -> int:
     before = path.stat()
     sections = core.parse(path.read_text(encoding="utf-8"))
     rn = core.right_now(sections)
@@ -133,7 +167,7 @@ def done_main(argv: Optional[List[str]] = None) -> int:
     if (now.st_mtime_ns, now.st_size) != (before.st_mtime_ns, before.st_size):
         print("REFUSED: file changed while writing; re-run", file=sys.stderr)
         return 3
-    trim.atomic_write(path, core.render(sections))
+    safety.write_private(path, core.render(sections))
     print(f"marked {state}: {label}")
     return 0
 
@@ -166,6 +200,12 @@ def lint(text: str, max_bytes: int = trim.DEFAULT_MAX_BYTES) -> Tuple[str, List[
         if literal:
             findings.append(f"{literal} entr{'y' if literal == 1 else 'ies'} tagged with an unexpanded "
                             "variable (`[session $...]`); write entries with `inflight add`")
+        leaky = [e for e in entries if safety.secret_kinds(e.text)]
+        if leaky:
+            kinds = sorted({k for e in leaky for k in safety.secret_kinds(e.text)})
+            ids = ", ".join(f"#{e.id}" if e.id else e.head[:40] for e in leaky)
+            findings.append(f"{len(leaky)} entr{'y' if len(leaky) == 1 else 'ies'} with credential-looking "
+                            f"text ({', '.join(kinds)}): {ids}. Remove it and rotate the credential if real")
         summary = f"{len(entries)} entries, {untagged} untagged, " + summary
     return summary, findings
 
@@ -181,6 +221,9 @@ def check_main(argv: Optional[List[str]] = None) -> int:
         print(f"FAIL  {path} missing (run `inflight init`)")
         return 1
     summary, findings = lint(path.read_text(encoding="utf-8"), args.max_bytes)
+    mode = path.stat().st_mode & 0o777
+    if mode & 0o077:
+        findings.append(f"{path.name} is mode {mode:o}, readable by others (`chmod 600 {path}`)")
     print(summary)
     for f in findings:
         print(f"FAIL  {f}")

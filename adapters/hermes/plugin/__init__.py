@@ -32,7 +32,7 @@ _SRC = Path(os.path.realpath(__file__)).parents[3] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from agent_inflight import core, entries, paths, reinject, retag, sessions, trim  # noqa: E402
+from agent_inflight import core, entries, paths, reinject, retag, safety, sessions  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +124,12 @@ def on_transform_tool_result(tool_name: str = "", args: Any = None, result: Any 
         notes: List[str] = []
         res = retag.retag(text, snap.keys, session_id, snap.provenance)
         if res.retagged:
-            if _stat(target) == st:
-                trim.atomic_write(target, res.text)
+            wrote = False
+            with safety.locked(target, timeout=1.0):
+                if _stat(target) == st:
+                    safety.write_private(target, res.text)
+                    wrote = True
+            if wrote:
                 text = res.text
                 notes.append(f"retagged {res.retagged} new entr{'y' if res.retagged == 1 else 'ies'} "
                              f"with [session {session_id}]")

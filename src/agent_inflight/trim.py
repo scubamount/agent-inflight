@@ -33,15 +33,13 @@ write is refused with exit 3; re-run.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
-import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from . import core, paths, progress
+from . import core, paths, progress, safety
 
 DEFAULT_DAYS = 7
 DEFAULT_MAX_BYTES = 24_000  # ~6k tokens
@@ -148,18 +146,6 @@ def session_activity(text: str) -> Dict[str, float]:
     return acts
 
 
-def atomic_write(path: Path, text: str) -> None:
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="inflight trim", description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--days", type=int, default=paths.env_int("INFLIGHT_DAYS", DEFAULT_DAYS))
@@ -201,23 +187,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("(dry run — pass --apply to write)")
         return 0
 
-    now = path.stat()
-    if (now.st_mtime_ns, now.st_size) != (before_stat.st_mtime_ns, before_stat.st_size):
-        print(f"REFUSED: {path} changed while trimming (another session wrote it); re-run", file=sys.stderr)
+    try:
+        with safety.locked(path):
+            now = path.stat()
+            if (now.st_mtime_ns, now.st_size) != (before_stat.st_mtime_ns, before_stat.st_size):
+                print(f"REFUSED: {path} changed while trimming (another session wrote it); re-run",
+                      file=sys.stderr)
+                return 3
+            if archived:
+                adir = paths.archive_dir(path)
+                safety.ensure_private_dir(adir)
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                body = (f"# Archived from {path.name} on {datetime.now():%Y-%m-%d %H:%M}\n\n"
+                        + "\n\n".join(archived) + "\n")
+                n = 0
+                while True:
+                    dest = adir / (f"inflight-{stamp}.md" if n == 0 else f"inflight-{stamp}-{n}.md")
+                    try:
+                        safety.create_private(dest, body)
+                        break
+                    except FileExistsError:
+                        n += 1
+                print(f"archived -> {dest}")
+            safety.write_private(path, new_text)
+    except safety.LockTimeout as e:
+        print(f"REFUSED: {e}; re-run", file=sys.stderr)
         return 3
-
-    if archived:
-        adir = paths.archive_dir(path)
-        adir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = adir / f"inflight-{stamp}.md"
-        n = 1
-        while dest.exists():
-            dest = adir / f"inflight-{stamp}-{n}.md"
-            n += 1
-        dest.write_text(f"# Archived from {path.name} on {datetime.now():%Y-%m-%d %H:%M}\n\n"
-                        + "\n\n".join(archived) + "\n", encoding="utf-8")
-        print(f"archived -> {dest}")
-    atomic_write(path, new_text)
     print(f"wrote {path}")
     return 0

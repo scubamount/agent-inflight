@@ -34,7 +34,9 @@ def archive_dir(for_file: Path) -> Path:
 
 def session_id() -> str:
     """This session's id, if the harness exports one."""
-    for var in ("INFLIGHT_SESSION_ID", "HERMES_SESSION_ID", "CLAUDE_SESSION_ID"):
+    # CLAUDE_CODE_SESSION_ID: set by Claude Code in Bash-tool, hook and MCP
+    # subprocesses (https://code.claude.com/docs/en/env-vars).
+    for var in ("INFLIGHT_SESSION_ID", "HERMES_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         val = os.environ.get(var, "").strip()
         if val:
             return val

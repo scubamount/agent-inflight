@@ -72,12 +72,12 @@ Then wire your agent:
 | Command | Does |
 |---|---|
 | `inflight init` | Create the tracker from the template if missing. Never overwrites. |
-| `inflight add "<head>" [body]` | Prepend `**<date time> [session <id> #<entry-id>] — <head>.** <body>` to `## Right now`. The 6-hex entry id is the stable key `done` matches on. Reads stdin if no args. |
+| `inflight add "<head>" [body]` | Prepend `**<date time> [session <id> #<entry-id>] — <head>.** <body>` to `## Right now`. The 6-hex entry id is the stable key `done` matches on. Reads stdin if no args. Exit 3 lock/race, 4 would forge an entry, 5 looks like a credential (`--force` overrides 5 only). |
 | `inflight sessions [--json] [--children]` | Owner, status, progress, and drill/resume commands for each tagged entry. `--children` lists the delegated subagent sessions of each entry's conversation, read from the backend (never stored in the file). |
 | `inflight me` | Print this session's `[session <id>]` tag. |
 | `inflight done <match> [--reopen] [--dry-run]` | Mark one entry done: `<match>` is its id (`a1b2c3`) or a unique substring of the head. Exit 1 no match, 2 ambiguous (lists candidates), 3 file changed. `--reopen` makes it active again. |
 | `inflight trim [--apply]` | Pause active entries untouched for `INFLIGHT_STALE_DAYS`; archive done entries after a day; then, over budget, archive done → paused → active (oldest first). Active entries are never archived for age. Dry run by default; lists every pause/archive. |
-| `inflight check` | Lint: missing section, duplicate `## Right now`, over budget, undated entries, unexpanded `$VAR` tags. Exit 1 on findings. |
+| `inflight check` | Lint: missing section, duplicate `## Right now`, over budget, undated entries, unexpanded `$VAR` tags, credential-looking text, tracker readable by others. Exit 1 on findings. |
 | `inflight path` | Print the resolved tracker path. |
 
 ## Entry format
@@ -110,7 +110,7 @@ All optional, via environment:
 |---|---|---|
 | `INFLIGHT_FILE` | `<home>/inflight.md` | Tracker path. |
 | `INFLIGHT_HOME` | `$HERMES_HOME`, else `~/.hermes` if it exists, else `~/.agent-inflight` | Directory for the tracker and `inflight-archive/`. |
-| `INFLIGHT_SESSION_ID` | `$HERMES_SESSION_ID`, then `$CLAUDE_SESSION_ID` | Id written into the tag. |
+| `INFLIGHT_SESSION_ID` | `$HERMES_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID` | Id written into the tag. |
 | `INFLIGHT_DAYS` | `7` | Non-`Right now` sections dated older than this are archived. |
 | `INFLIGHT_STALE_DAYS` | `3` | An active entry untouched this long (head date and its session's last activity) becomes `paused`. |
 | `INFLIGHT_DONE_GRACE_DAYS` | `1` | Done entries are archived after this. |
@@ -134,8 +134,18 @@ enough to hand work between sessions. Adding a backend = one class with
 - **Nothing is deleted.** Trimmed text goes to `inflight-archive/inflight-<stamp>.md`.
 - **Unfinished work is not archived for age.** Age pauses an entry; only `done`, or the byte budget, archives it.
 - **Idempotent.** `trim --apply` over its own output writes nothing and no archive.
-- **Race-safe writes.** `add` and `trim` write atomically and refuse (exit 3)
-  if another session changed the file between read and write.
+- **Race-safe writes.** Every writer (`add`, `done`, `trim`, the Hermes plugin)
+  holds an `flock` on `inflight.md.lock` and writes atomically. `add` retries
+  when an unlocked writer (an editor) races it; `done`/`trim` refuse (exit 3).
+- **Private files.** Tracker and archive files are `0600`, the archive dir
+  `0700`. `check` flags a tracker readable by others.
+- **No forged entries.** `add` refuses (exit 4) a headline with a newline or a
+  session/entry tag, and a body line that starts a dated entry or `## `
+  section, so one call can't write an entry tagged as another session.
+- **No secrets.** `add` refuses (exit 5) text matching common credential
+  shapes (API keys, GitHub/Slack/AWS tokens, private-key blocks, JWTs, URLs
+  with passwords) and names only the kind, never the value. `--force` for a
+  false positive. `check` reports matching entries by id.
 - **Read-only session lookups.** `state.db` is opened with `mode=ro`.
 
 ## Security

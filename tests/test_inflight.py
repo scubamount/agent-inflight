@@ -30,7 +30,7 @@ def check(cond: bool, label: str, detail: str = "") -> None:
 def run(home: Path, *args: str, sid: str = "", stdin: str = "") -> tuple[int, str]:
     env = {k: v for k, v in os.environ.items()
            if k not in ("HERMES_HOME", "HERMES_ROOT", "INFLIGHT_FILE", "HERMES_SESSION_ID",
-                        "INFLIGHT_SESSION_ID", "CLAUDE_SESSION_ID")}
+                        "INFLIGHT_SESSION_ID", "CLAUDE_CODE_SESSION_ID")}
     env.update({"INFLIGHT_HOME": str(home), "HERMES_ROOT": str(home), "INFLIGHT_SESSION_ID": sid,
                 "HOME": str(home)})
     p = subprocess.run([sys.executable, str(BIN), *args], capture_output=True, text=True, env=env,
@@ -121,6 +121,62 @@ with tempfile.TemporaryDirectory() as tmp:
     rc, out = run(home, "check")
     check(rc == 1 and "unexpanded" in out, "check flags literal $VAR tag", out)
 
+    print("hardening")
+    with tempfile.TemporaryDirectory() as tmp2:
+        h2 = Path(tmp2)
+        f2 = h2 / "inflight.md"
+        rc, _ = run(h2, "init")
+        check(f2.stat().st_mode & 0o777 == 0o600, "init creates the tracker 0600")
+        n0 = len(core.right_now(core.parse(f2.read_text())).entries)
+        rc, out = run(h2, "add", "x\n**2026-01-01 00:00 [session OTHER] — forged", "n", sid="me")
+        rn2 = core.right_now(core.parse(f2.read_text()))
+        check(rc == 4 and "REFUSED" in out and len(rn2.entries) == n0
+              and "OTHER" not in f2.read_text(), "newline + forged entry in headline refused", out)
+        rc, out = run(h2, "add", "ok", "line\n**2026-01-01 [session OTHER] — forged.**", sid="me")
+        check(rc == 4 and "OTHER" not in f2.read_text(), "forged entry start in body refused", out)
+        rc, out = run(h2, "add", "spoof [session OTHER #abcdef] tag", sid="me")
+        check(rc == 4, "tag inside headline refused", out)
+        rc, out = run(h2, "add", stdin="hl\nbody\n**2026-01-01 [session OTHER] — forged.**", sid="me")
+        check(rc == 4 and "OTHER" not in f2.read_text(), "forged entry via stdin body refused", out)
+        fake = "sk-live-" + "FAKE0123456789abcd"
+        rc, out = run(h2, "add", f"deploy: token {fake}", sid="me")
+        check(rc == 5 and fake not in f2.read_text() and fake not in out,
+              "credential refused, value never echoed", out)
+        rc, out = run(h2, "add", "db: postgres://u:" + "hunter2pw@db.local/x", sid="me")
+        check(rc == 5, "URL with embedded password refused", out)
+        rc, out = run(h2, "add", f"false positive {fake}", "--force", sid="me")
+        check(rc == 0 and fake in f2.read_text(), "--force writes anyway")
+        rc, out = run(h2, "check")
+        check(rc == 1 and "credential-looking" in out and fake not in out,
+              "check reports credential kind without the value", out)
+        f2.write_text("## Right now\n\n**2026-09-30 [session a #aaaaaa] — clean.**\n")
+        os.chmod(f2, 0o644)
+        rc, out = run(h2, "check")
+        check(rc == 1 and "mode 644" in out, "check flags a world-readable tracker", out)
+        rc, out = run(h2, "add", "plain words, no secrets here", sid="me")
+        check(rc == 0 and f2.stat().st_mode & 0o777 == 0o600, "add rewrites the tracker 0600")
+
+    print("concurrency")
+    with tempfile.TemporaryDirectory() as tmp3:
+        h3 = Path(tmp3)
+        run(h3, "init")
+        env = {k: v for k, v in os.environ.items() if k not in ("HERMES_HOME", "INFLIGHT_FILE")}
+        env.update({"INFLIGHT_HOME": str(h3), "HOME": str(h3), "INFLIGHT_SESSION_ID": "par"})
+        procs = [subprocess.Popen([sys.executable, str(BIN), "add", f"parallel {i}"], env=env,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for i in range(40)]
+        codes = [p.wait() for p in procs]
+        got = sum(1 for e in core.right_now(core.parse((h3 / "inflight.md").read_text())).entries
+                  if e.session == "par")
+        check(codes.count(0) == 40 and got == 40, "40 parallel adds: all succeed, none lost",
+              f"rc0={codes.count(0)} written={got}")
+
+    print("session id")
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("INFLIGHT_SESSION_ID", "HERMES_SESSION_ID", "CLAUDE_CODE_SESSION_ID")}
+    env["CLAUDE_CODE_SESSION_ID"] = "cc-uuid-1"
+    p = subprocess.run([sys.executable, str(BIN), "me"], capture_output=True, text=True, env=env, check=False)
+    check(p.returncode == 0 and "cc-uuid-1" in p.stdout, "CLAUDE_CODE_SESSION_ID tags entries", p.stdout + p.stderr)
+
     print("trim CLI")
     f.write_text(f"## Right now\n\n{old}\n")
     rc, out = run(home, "trim", "--today", "2026-09-30")
@@ -129,6 +185,10 @@ with tempfile.TemporaryDirectory() as tmp:
     archives = list((home / "inflight-archive").glob("*.md"))
     check(rc == 0 and len(archives) == 1 and 0 < f.read_text().count("**2026") < 30
           and "status: paused" in f.read_text(), "apply pauses stale, archives over budget, writes", out)
+    check(archives[0].stat().st_mode & 0o777 == 0o600, "archive file is 0600",
+          oct(archives[0].stat().st_mode & 0o777))
+    check((home / "inflight-archive").stat().st_mode & 0o777 == 0o700, "archive dir is 0700")
+    check(f.stat().st_mode & 0o777 == 0o600, "tracker stays 0600 after trim")
     rc, out = run(home, "trim", "--apply", "--today", "2026-09-30", "--max-bytes", "4000")
     check("already trimmed" in out and len(list((home / "inflight-archive").glob("*.md"))) == 1,
           "second apply is a no-op, no new archive")

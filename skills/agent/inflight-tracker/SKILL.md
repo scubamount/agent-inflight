@@ -1,7 +1,7 @@
 ---
 name: inflight-tracker
 description: Shared cross-session work tracker; read at start, update at end.
-version: 0.2.0
+version: 0.2.1
 author: scubamount, Hermes Agent
 license: Proprietary
 platforms: [linux, macos]
@@ -89,8 +89,13 @@ Don't recite the tracker back to the user. Use it.
 
 - **Stale ≠ wrong, fresh ≠ right.** Entries describe; disk decides.
 - **Resuming an ACTIVE session** puts two writers on one conversation. Nothing locks it.
-- **Hand edits race.** `inflight add`/`trim` refuse to write (exit 3) if the
-  file changed under them; re-run. Plain editor saves have no such guard.
+- **Hand edits race.** CLI writers lock `inflight.md.lock`; `done`/`trim`
+  refuse (exit 3) if the file changed under them; re-run. Plain editor saves
+  take no lock — prefer `inflight add`.
+- **`add` exit 4** = headline/body would forge an entry (newline in the
+  headline, a tag, or a body line starting `**YYYY-MM-DD` / `## `). Rephrase.
+- **`add` exit 5** = text looks like a credential. Remove it; tell the user to
+  rotate it if real. `--force` only for a confirmed false positive.
 - **Size is a per-turn cost.** Harnesses that inject the file every turn pay
   for every byte. `trim` enforces a byte + line budget and an age limit;
   archived text goes to `inflight-archive/`, nothing is deleted.

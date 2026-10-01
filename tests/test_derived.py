@@ -27,7 +27,7 @@ E = ("**2026-09-30 19:10 [session S] — x.** prose\n- [x] a\n- [ ] b\n- [~] c\n
 def run(home: Path, *args: str, sid: str = "", env_extra=None) -> "tuple[int, str]":
     env = {k: v for k, v in os.environ.items()
            if k not in ("HERMES_HOME", "HERMES_ROOT", "INFLIGHT_FILE", "HERMES_SESSION_ID",
-                        "INFLIGHT_SESSION_ID", "CLAUDE_SESSION_ID")}
+                        "INFLIGHT_SESSION_ID", "CLAUDE_CODE_SESSION_ID")}
     env.update({"INFLIGHT_HOME": str(home), "HERMES_ROOT": str(home), "INFLIGHT_SESSION_ID": sid,
                 "HOME": str(home)}, **(env_extra or {}))
     p = subprocess.run([sys.executable, str(BIN), *args], capture_output=True, text=True, env=env, check=False)
