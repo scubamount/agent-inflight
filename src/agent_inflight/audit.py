@@ -107,6 +107,7 @@ class RepoState:
     repo: str
     findings: List[str] = field(default_factory=list)  # owed work
     notes: List[str] = field(default_factory=list)     # informational, never owed
+    merged: List[Tuple[str, str, str]] = field(default_factory=list)  # (branch, count, default ref)
     error: Optional[str] = None
 
     @property
@@ -117,6 +118,33 @@ class RepoState:
 def _redact(text: str) -> str:
     kinds = safety.secret_kinds(text)
     return f"[redacted: {', '.join(kinds)}]" if kinds else text
+
+
+def _default_ref(g: Any) -> Optional[str]:
+    """The remote default branch as last fetched, or None. No network."""
+    for ref in ("refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master",
+                "refs/remotes/upstream/HEAD", "refs/remotes/upstream/main", "refs/remotes/upstream/master"):
+        try:
+            g("rev-parse", "--verify", "--quiet", ref)
+            return ref
+        except GitError:
+            continue
+    return None
+
+
+def _already_on(g: Any, default: Optional[str], branch: str) -> bool:
+    """True only when every commit of `branch` missing from `default` has a
+    patch-id twin on `default` (rebased / cherry-picked). A squash of several
+    commits has no twin, so it stays unpushed. Any git error or timeout ->
+    False (keep it as unpushed: never hide work on a failed check)."""
+    if not default:
+        return False
+    try:
+        out = g("rev-list", "--count", "--cherry-pick", "--right-only", "--no-merges",
+                f"{default}...refs/heads/{branch}").strip()
+    except GitError:
+        return False
+    return out == "0"
 
 
 def inspect(repo: str, timeout: float = 5.0) -> RepoState:
@@ -133,6 +161,7 @@ def inspect(repo: str, timeout: float = 5.0) -> RepoState:
         has_remote = bool(g("for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes").strip())
         if has_remote:
             ignore = ignore_branches()
+            default = _default_ref(g)
             for line in g("for-each-ref", "--format=%(refname:short)\t%(upstream)\t%(upstream:track)",
                           "refs/heads").splitlines():
                 name, upstream, track = (line.split("\t") + ["", ""])[:3]
@@ -141,7 +170,9 @@ def inspect(repo: str, timeout: float = 5.0) -> RepoState:
                 # Unpushed = on NO remote-tracking ref. Ahead-of-upstream alone overcounts
                 # when the upstream ref is stale but the commits are on another remote.
                 n = g("rev-list", "--count", f"refs/heads/{name}", "--not", "--remotes").strip()
-                if n and n != "0":
+                if n and n != "0" and _already_on(g, default, name):
+                    rs.merged.append((_redact(name), n, (default or "").replace("refs/remotes/", "")))
+                elif n and n != "0":
                     rs.findings.append(f"{n} unpushed commit(s) on {_redact(name)}"
                                        + ("" if upstream else " (no upstream)"))
                 elif upstream and "ahead" in track:
@@ -194,13 +225,19 @@ class Plan:
     resolved_ids: set = field(default_factory=set)                           # audit entry ids to close
     truncated: bool = False                                                  # hit the deadline
     noted: List[RepoState] = field(default_factory=list)                     # clean, with notes
+    merged_repos: List[RepoState] = field(default_factory=list)              # any branch already on default
 
     def as_dict(self) -> Dict[str, Any]:
         return {"catch_up": [{"session": s, "repo": r.repo, "findings": r.findings, "status": st}
                              for s, r, st in self.catch_up],
                 "in_use": [{"repo": r, "session": s} for r, s in self.in_use],
                 "waiting": [{"repo": r, "session": s} for r, s in self.waiting],
-                "unowned": [{"repo": r.repo, "findings": r.findings, "notes": r.notes} for r in self.unowned],
+                "unowned": [{"repo": r.repo, "findings": r.findings, "notes": r.notes,
+                             "already_on_default": [{"branch": b, "commits": n, "default": d} for b, n, d in r.merged]}
+                            for r in self.unowned],
+                "already_on_default": [{"repo": r.repo, "branches": [{"branch": b, "commits": n, "default": d}
+                                                                     for b, n, d in r.merged]}
+                                       for r in self.merged_repos],
                 "notes": [{"repo": r.repo, "notes": r.notes} for r in self.noted],
                 "clean": self.clean, "errors": [{"repo": r.repo, "error": r.error} for r in self.errors],
                 "resolved": self.resolved, "truncated": self.truncated}
@@ -259,6 +296,8 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
             plan.clean += 1
         if rs.notes and not rs.owed:
             plan.noted.append(rs)
+        if rs.merged:
+            plan.merged_repos.append(rs)
     return plan
 
 
@@ -382,6 +421,14 @@ def _print(plan: Plan, apply_mode: bool) -> None:
         print(f"  {_short(rs.repo)}: " + "; ".join(rs.findings))
         for n in rs.notes:
             print(f"      note: {n}")
+    if plan.merged_repos:
+        n = sum(len(rs.merged) for rs in plan.merged_repos)
+        print(f"\nalready on the default branch (commits on no remote, every one patch-equivalent to the "
+              f"default branch; not owed work): {n} branch(es)")
+        for rs in plan.merged_repos:
+            print(f"  {_short(rs.repo)}:")
+            for b, c, d in rs.merged:
+                print(f"      {b} ({c} commit(s), already on {d})")
     if plan.noted:
         print(f"\nnotes (not owed work): {len(plan.noted)}")
         for rs in plan.noted:

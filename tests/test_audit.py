@@ -347,6 +347,80 @@ class Unpushed(World):
         self.assertEqual(self.tracker.read_bytes(), before)
 
 
+class AlreadyOnDefault(World):
+    """Q1 rules: patch-id twins on the default branch -> listed separately, never dropped."""
+
+    def setUp(self):
+        super().setUp()
+        self.r = mkrepo(self.code / "r", self.remote)
+
+    def branch(self, name, files):
+        git(self.r, "checkout", "-q", "-b", name, "main")
+        for f in files:
+            (self.r / f).write_text(f + "\n")
+            git(self.r, "add", "-A")
+            git(self.r, "commit", "-qm", f"add {f}")
+        git(self.r, "checkout", "-q", "main")
+        # move main on, so picks get new parents (a same-second pick onto the same
+        # parent reproduces the identical commit and proves nothing about patch-ids)
+        (self.r / f"main-{name}").write_text("m\n")
+        git(self.r, "add", "-A")
+        git(self.r, "commit", "-qm", f"main moves on ({name})")
+
+    def test_rebased_branch_listed_already_on_main(self):
+        self.branch("feat", ["x1", "x2"])
+        for c in git(self.r, "rev-list", "--reverse", "main..feat").split():
+            git(self.r, "cherry-pick", c)  # rebase onto main: new SHAs, same patches
+        git(self.r, "push", "-q")
+        rs = audit.inspect(str(self.r))
+        self.assertEqual(rs.findings, [])
+        self.assertEqual(rs.merged, [("feat", "2", "origin/main")])
+
+    def test_squash_of_several_commits_stays_unpushed(self):
+        self.branch("sq", ["s1", "s2", "s3"])
+        git(self.r, "merge", "-q", "--squash", "sq")
+        git(self.r, "commit", "-qm", "squash")
+        git(self.r, "push", "-q")
+        rs = audit.inspect(str(self.r))
+        self.assertEqual(rs.merged, [])
+        self.assertIn("3 unpushed commit(s) on sq (no upstream)", rs.findings)
+
+    def test_unique_commits_stay_unpushed(self):
+        self.branch("uniq", ["u1"])
+        rs = audit.inspect(str(self.r))
+        self.assertEqual(rs.merged, [])
+        self.assertIn("1 unpushed commit(s) on uniq (no upstream)", rs.findings)
+
+    def test_partial_match_stays_unpushed(self):
+        self.branch("half", ["h1", "h2"])
+        first = git(self.r, "rev-list", "--reverse", "main..half").split()[0]
+        git(self.r, "cherry-pick", first)
+        git(self.r, "push", "-q")
+        rs = audit.inspect(str(self.r))
+        self.assertEqual(rs.merged, [])
+        self.assertIn("2 unpushed commit(s) on half (no upstream)", rs.findings)
+
+    def test_failed_check_keeps_it_unpushed(self):
+        def boom(*a):
+            raise safegit.GitError("timed out after 5s")
+        self.assertFalse(audit._already_on(boom, "refs/remotes/origin/main", "x"))
+        self.assertFalse(audit._already_on(lambda *a: "0", None, "x"))  # no default branch known
+
+    def test_listed_in_output_never_dropped(self):
+        self.branch("feat", ["x1"])
+        git(self.r, "cherry-pick", git(self.r, "rev-parse", "feat").strip())
+        git(self.r, "push", "-q")
+        p = subprocess.run([sys.executable, str(BIN), "audit"], capture_output=True, text=True,
+                           env={**os.environ}, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("already on the default branch", p.stdout)
+        self.assertIn("feat (1 commit(s), already on origin/main)", p.stdout)
+        p = subprocess.run([sys.executable, str(BIN), "audit", "--json"], capture_output=True, text=True,
+                           env={**os.environ}, timeout=60)
+        d = json.loads(p.stdout)
+        self.assertEqual(d["already_on_default"][0]["branches"][0]["branch"], "feat")
+
+
 class Apply(World):
     def setUp(self):
         super().setUp()
