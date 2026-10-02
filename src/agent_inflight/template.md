@@ -1,7 +1,8 @@
 # In-flight work
 
-What is open right now, across every agent session on this machine. Agents
-read this at session start and update `## Right now` at session end. Keep
+What is open right now, across every agent session on this machine. Each
+session starts with a brief built from `## Right now` (`inflight brief`) and
+updates it at session end. Keep
 entries short: state a future session needs, not a log of what happened.
 `inflight trim --apply` archives old entries to `inflight-archive/`.
 

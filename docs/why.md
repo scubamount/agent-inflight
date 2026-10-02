@@ -31,13 +31,14 @@ machine over several months of daily multi-session agent work:
 
 One file, one section that matters (`## Right now`), and three rules:
 
-1. **Read at start.** Before touching a repo or service, read the entries for
-   it and check whether the sessions that wrote them are still alive.
+1. **Read at start.** Each session gets a brief: its own entries in full and
+   one line per other entry. Before touching a repo or service, check whether
+   the sessions that wrote its entries are still alive.
 2. **Write at end.** Anything not landed gets one dated, session-tagged
    paragraph: what state it's in, what is NOT done, the next step, the handle
    (SHA, path, PR).
 3. **Keep it small.** Old entries move to an archive automatically, so the
-   file stays cheap enough that agents actually load it.
+   brief stays cheap enough to give every session.
 
 The CLI enforces the parts agents get wrong when doing it by hand:
 
@@ -47,7 +48,7 @@ The CLI enforces the parts agents get wrong when doing it by hand:
   working on this?" has an answer instead of a guess. On Hermes it follows
   context-compression, so a tag on a compacted session resolves to the
   session that continues the work.
-- `inflight trim` enforces a byte budget, a line budget, and an age limit,
+- `inflight trim` keeps the brief's headlines and the file inside their budgets, pauses stale entries,
   never deletes (archive only), and is idempotent so it can run from any
   update script or cron without churning.
 - `inflight check` catches the file drifting out of shape.

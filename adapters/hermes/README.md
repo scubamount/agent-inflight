@@ -18,12 +18,13 @@
   `pre_tool_call` (observe only, never blocks) + `transform_tool_result`
   (the only hook whose return reaches the model). No tool calls, no
   subprocesses; any error leaves the result unchanged.
-  Also `pre_llm_call`: on the first turn after a context compaction
-  (hermes-lcm in-place summaries or the built-in compressor), or the first
-  turn of a resumed session, it injects THIS session's entries (tags in its
-  compression lineage; never a delegation parent's) into the user turn,
-  capped at 6 KB. Fresh sessions get nothing extra. `INFLIGHT_REINJECT=0`
-  turns it off.
+  Also `pre_llm_call`: on a session's first turn, the first turn after a
+  context compaction (hermes-lcm in-place summaries or the built-in
+  compressor), and the first turn of a resumed session, it injects the
+  brief into the user turn: this session's open entries in full (tags in its
+  compression lineage; never a delegation parent's), one line per other open
+  entry, at most 6 KB (see `inflight brief`). Subagents and cron runs get
+  nothing. `INFLIGHT_REINJECT=0` turns it off.
 - status backend: `inflight sessions` reads `<hermes-home>/state.db` and
   `profiles/*/state.db` read-only, and follows compression children
 
@@ -33,7 +34,7 @@ The skill loads on trigger. To make the start/end steps unconditional, add
 two lines to `<hermes-home>/SOUL.md` (or the profile's SOUL.md):
 
 ```markdown
-- **Session start** (repo/infra work): read `inflight.md` § Right now; run `inflight sessions`. ACTIVE sibling on the same files = coordinate, don't mutate.
+- **Session start** (repo/infra work): read the `[inflight brief]` block the plugin injects (no block: run `inflight brief`); run `inflight sessions`. ACTIVE sibling on the same files = coordinate, don't mutate. Read the full file only when an entry's detail matters.
 - **Session close:** `inflight add "<thing>: <state>" "<not done; next step>"` for anything not landed; `inflight done <id>` for resolved ones.
 ```
 

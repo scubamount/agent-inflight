@@ -140,16 +140,23 @@ class HookProtocol(Home):
         rc, out3 = self.hook("pre-tool", {"session_id": "C", "cwd": str(self.repo)})
         self.assertEqual(out3, "")  # ended sessions don't collide
 
-    def test_session_start_compact_reinjects_own_entries(self):
+    def test_session_start_prints_brief(self):
         (self.home / "inflight.md").write_text(
             "## Right now\n\n**2026-10-01 10:00 [session s1 #aaaaaa] — mine: NOT pushed.** x\n\n"
             "**2026-10-01 09:00 [session s2 #bbbbbb] — theirs.** y\n")
+        for source, reason in (("startup", "session start"), ("clear", "session start"),
+                               ("compact", "compaction"), ("resume", "resume")):
+            rc, out = self.hook("session-start", {"session_id": "s1", "source": source})
+            self.assertEqual(rc, 0)
+            self.assertIn(f"[inflight brief: {reason}]", out)
+            self.assertIn("mine: NOT pushed.** x", out)           # own entry, in full
+            self.assertIn("#bbbbbb UNKNOWN 10-01 s2: theirs.", out)  # other entry, one line, no body
+            self.assertNotIn(" y\n", out + "\n")
+            self.assertIn("Verify on disk", out)
+
+    def test_session_start_nothing_open_prints_nothing(self):
         rc, out = self.hook("session-start", {"session_id": "s1", "source": "startup"})
-        self.assertEqual(out, "")
-        rc, out = self.hook("session-start", {"session_id": "s1", "source": "compact"})
-        self.assertIn("mine: NOT pushed", out)
-        self.assertNotIn("theirs", out)
-        self.assertIn("verify on disk", out)
+        self.assertEqual((rc, out), (0, ""))
 
     def test_hook_log_whitelist(self):
         state.log("x", session="s1", tool_args="LEAK", content="LEAK", error="E")

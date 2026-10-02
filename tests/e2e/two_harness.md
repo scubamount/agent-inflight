@@ -22,7 +22,7 @@ session that stays open, so use interactive `claude` there.
 2. [human] In that session: `inflight add "e2e: CC entry" "part A"`, then `inflight sessions`.
    Expect: entry tagged with the CC session; status ACTIVE (heartbeat backend).
 3. [human] Ask it to edit `R/a.txt` (any content). Then `/compact`.
-   Expect: after compaction, a block starting `[inflight: your open entries` containing "e2e: CC entry".
+   Expect: after compaction, a block starting `[inflight brief: compaction]` containing "e2e: CC entry".
 4. [human] `/clear`. In the new conversation run `inflight sessions`.
    Expect: the old CC session ENDED, reason `clear`.
 5. [human] Leave `a.txt` uncommitted, quit Claude Code (`/exit`), open a new `claude` in R

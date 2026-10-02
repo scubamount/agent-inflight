@@ -10,7 +10,7 @@ inflight hook <event>   < one JSON object on stdin
 
 - **Exit status is always 0.** In Claude Code, exit 2 from a `PreToolUse` hook blocks the tool, so every error is caught, logged to `hooks.log` as `hook-error` (exception class name only) and swallowed. Bad JSON, a non-object, an unknown event or a missing session id all produce exit 0 with no output.
 - **Unknown fields are ignored.** Fields may be added in later versions without bumping the protocol version. Removing or changing a field bumps it.
-- **stdout is plain text for the model, or nothing.** Only `session-start` (on resume or compact) and `pre-tool` (on a collision) print anything.
+- **stdout is plain text for the model, or nothing.** Only `session-start` (the brief, when anything is open) and `pre-tool` (on a collision) print anything.
 - **`args` (tool arguments) is accepted and never read, stored or logged.**
 - **`session_id`** falls back to `$INFLIGHT_SESSION_ID`, `$HERMES_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. It must match `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`, with no `..`. Anything else is refused (logged as `hook-refused`), and the id is never used as a file name.
 
@@ -26,7 +26,7 @@ inflight hook <event>   < one JSON object on stdin
 
 | Event | Payload | Effect | stdout |
 |---|---|---|---|
-| `session-start` | `session_id, cwd, source` (`new`, `startup`, `resume`, `compact` or `clear`), optional `harness` | Records the session and clears any ended flag. Does **not** record `cwd`'s repo: opening a session in a repo is not touching it, and recording it would make the new session the repo's latest recorder and take over the owed work a dead session left there. Tools and `cwd-changed` record repos. On `new`/`startup`: runs the audit catch-up (recorded repos of ENDED sessions only, built-in backends only, about 3 s budget, at most every 10 min unless a session ended since the last run; writes `## Right now` entries tagged with the dead session). | On `resume`/`compact`: the session's own open entries, as the same "verify on disk" block the Hermes plugin injects |
+| `session-start` | `session_id, cwd, source` (`new`, `startup`, `resume`, `compact` or `clear`), optional `harness` | Records the session and clears any ended flag. Does **not** record `cwd`'s repo: opening a session in a repo is not touching it, and recording it would make the new session the repo's latest recorder and take over the owed work a dead session left there. Tools and `cwd-changed` record repos. On `new`/`startup`: runs the audit catch-up (recorded repos of ENDED sessions only, built-in backends only, about 3 s budget, at most every 10 min unless a session ended since the last run; writes `## Right now` entries tagged with the dead session). | The brief: the session's own open entries in full, one line per other open entry, at most 6 KB (the same text the Hermes plugin injects; `inflight brief` prints it). Nothing when no entry is open |
 | `pre-tool` | `session_id, cwd, tool, call_id` | Heartbeat | A collision warning, once per (session, repo), when another session with a heartbeat in the last 15 min touched the same repo |
 | `post-tool` | `session_id, cwd, tool, call_id` | Heartbeat. Records `cwd`'s repo as touched | none |
 | `cwd-changed` | `session_id, cwd` | Heartbeat. Records the repo | none |

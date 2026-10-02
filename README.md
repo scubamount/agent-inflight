@@ -28,8 +28,8 @@ State that is *in flight* (done locally but not landed) lives nowhere:
 |---|---|
 | A session commits, gets closed, and the push never happens. Nobody notices for days. | The session's last act is `inflight add "...: committed, NOT pushed"`. If it dies first and hooks are wired, the catch-up audit finds the unpushed commits and writes the entry for it. |
 | Two sessions edit the same repo and one sweeps the other's changes into its commit. | Before an edit, the second session gets a warning: another live session touched this repo in the last 15 minutes. |
-| Every new session starts with "where were we?" | The session reads `## Right now` and runs `inflight sessions`. If it gets compacted, its own entries are re-injected. |
-| The notes file that fixes all this grows until it costs thousands of tokens per turn. | `inflight trim` enforces a byte and line budget. It archives text and never deletes it. |
+| Every new session starts with "where were we?" | With hooks wired, each session starts with a brief: its own open entries in full, one line per other session's entry. The same brief comes back after a compaction. |
+| The notes file that fixes all this grows until it costs thousands of tokens per turn. | Sessions get the brief, capped at 6 KB, not the file. `inflight trim` keeps every open entry's headline inside that cap. It archives text and never deletes it. |
 
 The failures this was built from, with what each one cost:
 [docs/why.md](docs/why.md).
@@ -68,7 +68,8 @@ live session, so other sessions leave its files alone.
 Each session follows the same loop, enforced by the skill, the hooks or the
 instruction snippet:
 
-1. **Start: read.** Read `## Right now` and run `inflight sessions`.
+1. **Start: read.** Read the brief (injected by the hooks, or `inflight brief`)
+   and run `inflight sessions`.
    - ACTIVE owner on the same files: coordinate, don't edit them.
    - IDLE or ENDED owner with open work: verify it on disk, then take it over.
 2. **End: write.** For anything not landed, run
@@ -77,7 +78,7 @@ instruction snippet:
 3. **Finish: close.** `inflight done <id>` marks the entry done. `trim`
    archives it after a day.
 4. **Background: bound.** `inflight trim --apply` runs on a schedule. It pauses
-   stale entries and archives done ones, keeping the file under budget.
+   stale entries and archives done ones, keeping the brief under budget.
 
 With hooks wired (Claude Code, Hermes, or any harness that follows
 [the hook protocol](docs/hook-protocol.md)), these also happen automatically:
@@ -85,7 +86,7 @@ With hooks wired (Claude Code, Hermes, or any harness that follows
 | Event | What inflight does |
 |---|---|
 | An edit or shell tool call | Records which repo the session touched. Warns the agent once if another live session touched the same repo in the last 15 minutes. |
-| After a compaction or resume | Re-injects this session's own open entries so the agent still knows them. |
+| Session start, compaction, resume | Gives the agent the brief: its own open entries in full, one line per other open entry, at most 6 KB. |
 | New session start (or the daily cron job on Hermes) | Catch-up audit: owed git work that ENDED sessions left behind becomes entries, tagged with the dead session. |
 | Session end | Marks the session ENDED. |
 
@@ -115,8 +116,8 @@ When it finds Hermes, it also adds the Hermes skill and plugin. Flags:
 
 | Harness | Setup | You get |
 |---|---|---|
-| **Claude Code** | `inflight adapter install claude-code` prints the exact diff; add `--apply` to write it. Details: [adapters/claude-code](adapters/claude-code/README.md). | Session tags, heartbeats, collision warnings, re-injection after `/compact` and resume, catch-up audit |
-| **Hermes** | `install.sh` installs the skill and plugin. Enable the plugin with `plugins.enabled: [agent-inflight]`. For trimming and catch-up, use `install.sh --hermes-cron`. Details: [adapters/hermes](adapters/hermes/README.md). | Session tags, collision warnings, re-injection after compaction and resume, catch-up from the cron job, and status read from Hermes' own session database, which follows compression lineage |
+| **Claude Code** | `inflight adapter install claude-code` prints the exact diff; add `--apply` to write it. Details: [adapters/claude-code](adapters/claude-code/README.md). | Session tags, heartbeats, collision warnings, the brief at start and after `/compact` and resume, catch-up audit |
+| **Hermes** | `install.sh` installs the skill and plugin. Enable the plugin with `plugins.enabled: [agent-inflight]`. For trimming and catch-up, use `install.sh --hermes-cron`. Details: [adapters/hermes](adapters/hermes/README.md). | Session tags, collision warnings, the brief at start and after compaction and resume, catch-up from the cron job, and status read from Hermes' own session database, which follows compression lineage |
 | **Codex, OpenCode, Cursor, others** | Paste [the instruction snippet](adapters/generic/AGENTS-snippet.md) into your user-level `AGENTS.md` or rules file. Add the crontab line for trimming. | The read, write and close loop, driven by the agent |
 | **Any harness that can run hook commands** | Wire [hook protocol v1](docs/hook-protocol.md); see [docs/extending.md](docs/extending.md). | Everything the Claude Code adapter gives you |
 
@@ -125,10 +126,11 @@ When it finds Hermes, it also adds the Hermes skill and plugin. Flags:
 | Command | Purpose |
 |---|---|
 | `inflight add "<head>" [body]` | Add a dated, session-tagged entry to `## Right now` |
+| `inflight brief` | Print the brief a session gets at start |
 | `inflight sessions` | Show each entry's owner, status (ACTIVE, IDLE, ENDED) and progress |
 | `inflight done <id>` | Mark an entry done (`--reopen` makes it active again) |
 | `inflight trim [--apply]` | Pause stale entries; archive done and over-budget ones (dry run by default) |
-| `inflight check` | Lint the file: shape, budget, untagged entries, credential-like text, permissions |
+| `inflight check` | Lint the file: shape, budgets, untagged entries, credential-like text, permissions |
 | `inflight audit [--apply]` | Find owed git work (uncommitted, unpushed, stashed) for each session |
 | `inflight adapter …`, `hook …`, `plugin …` | Harness wiring, hook protocol, backend plugins |
 | `inflight init`, `path`, `me` | Create the file, print its path, print this session's tag |
@@ -179,6 +181,7 @@ of record instead. To report a vulnerability, follow [SECURITY.md](SECURITY.md).
 | [docs/extending.md](docs/extending.md) | Adding a harness, writing a backend plugin, writing an adapter |
 | [adapters/](adapters/) | Per-harness setup: Claude Code, Hermes, generic |
 | [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) | Development setup and rules, for humans and for coding agents |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each release |
 
 ## License
 

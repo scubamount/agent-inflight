@@ -177,8 +177,9 @@ class Reinject(TmpHome):
                         ("SUB", "Subagent", now - 450, None, None, now - 5, "TIP"),
                         ("NEW", "b", now - 10, None, None, now - 1, None)])
 
-    def turn(self, sid, hist, first=False):
-        return self.p.on_pre_llm_call(session_id=sid, conversation_history=hist, is_first_turn=first)
+    def turn(self, sid, hist, first=False, platform="cli"):
+        return self.p.on_pre_llm_call(session_id=sid, conversation_history=hist, is_first_turn=first,
+                                      platform=platform)
 
     def test_lineage_compression_only(self):
         from agent_inflight import sessions
@@ -186,16 +187,20 @@ class Reinject(TmpHome):
         self.assertEqual(be.lineage("TIP"), ["OLD", "TIP"])
         self.assertEqual(be.lineage("SUB"), ["SUB"])  # delegation parent is not lineage
 
-    def test_inject_once_after_lcm_compaction_owned_only(self):
-        self.assertIsNone(self.turn("TIP", [], first=True))  # conversation's first turn
-        out = self.turn("TIP", [{"role": "user", "content": LCM}])
-        self.assertIsNotNone(out)
-        ctx = out["context"]
-        self.assertIn("older entry", ctx)               # tagged OLD = lineage root
-        self.assertNotIn("foreign literal", ctx)
-        self.assertNotIn("closed task", ctx)              # done entries are not "open"
+    def test_first_turn_gets_brief_once(self):
+        ctx = self.turn("TIP", [], first=True)["context"]
+        self.assertIn("[inflight brief: session start]", ctx)
+        self.assertIn("**2026-09-30 19:10 [session OLD] — older entry.** body", ctx)  # own, in full
+        self.assertIn("- ? 09-28 untagged: foreign literal.", ctx)                   # other, one line
+        self.assertNotIn("closed task", ctx)                                          # done: left out
         self.assertIn("OLD -> TIP", ctx)
-        self.assertIn("after compaction", ctx)
+        self.assertIsNone(self.turn("TIP", [{"role": "user", "content": "x"}]))       # next turn: silent
+
+    def test_brief_again_after_lcm_compaction(self):
+        self.turn("TIP", [], first=True)
+        ctx = self.turn("TIP", [{"role": "user", "content": LCM}])["context"]
+        self.assertIn("[inflight brief: compaction]", ctx)
+        self.assertIn("older entry.** body", ctx)
         self.assertIsNone(self.turn("TIP", [{"role": "user", "content": LCM}]))  # unchanged -> silent
 
     def test_list_content_markers_seen(self):
@@ -203,15 +208,24 @@ class Reinject(TmpHome):
         out = self.turn("TIP", [{"role": "user", "content": [{"type": "text", "text": LCM}]}])
         self.assertIsNotNone(out)
 
-    def test_fresh_first_turn_silent(self):
-        self.assertIsNone(self.turn("NEW", [], first=True))
+    def test_session_owning_nothing_sees_headlines_only(self):
+        ctx = self.turn("NEW", [], first=True)["context"]
+        self.assertIn("Yours: none open.", ctx)
+        self.assertIn("09-30 OLD: older entry.", ctx)
+        self.assertNotIn("body", ctx)
 
     def test_resumed_session_injects(self):
         out = self.turn("TIP", [{"role": "user", "content": "earlier"}], first=False)
-        self.assertIn("after resumed", out["context"])
+        self.assertIn("[inflight brief: resume]", out["context"])
 
-    def test_subagent_gets_nothing(self):
-        self.assertIsNone(self.turn("SUB", [{"role": "user", "content": LCM}]))
+    def test_subagent_and_cron_get_nothing(self):
+        self.assertIsNone(self.turn("SUB", [], first=True, platform="subagent"))
+        self.assertIsNone(self.turn("SUB", [{"role": "user", "content": LCM}], platform="subagent"))
+        self.assertIsNone(self.turn("CRON1", [], first=True, platform="cron"))
+
+    def test_nothing_open_nothing_injected(self):
+        self.f.write_text("## Right now\n\n**2026-09-30 18:00 [session TIP] — closed.** x\nstatus: done 2026-09-30\n")
+        self.assertIsNone(self.turn("TIP", [], first=True))
 
     def test_opt_out(self):
         os.environ["INFLIGHT_REINJECT"] = "0"
@@ -221,11 +235,15 @@ class Reinject(TmpHome):
             os.environ.pop("INFLIGHT_REINJECT")
 
     def test_cap(self):
-        from agent_inflight import reinject
+        from agent_inflight import brief
         big = [core.Entry(f"**2026-09-30 [session TIP] — e{i}.** " + "x" * 3000) for i in range(5)]
-        out = reinject.render(big, "TIP", ["TIP"], "compaction")
-        self.assertLessEqual(len(out.encode()), reinject.MAX_BYTES + 200)
+        others = [core.Entry(f"**2026-09-29 10:00 [session O{i} #{i:06x}] — other {i}: " + "y" * 120 + ".**")
+                  for i in range(60)]
+        out = brief.render(big, others, "TIP", ["TIP"], "compaction")
+        self.assertLessEqual(len(out.encode()), brief.BRIEF_MAX_BYTES)
         self.assertIn("omitted for size", out)
+        self.assertIn("other 0", out)                    # headlines keep their reserved room
+        self.assertIn("more; `inflight sessions` lists them.", out)
 
     def test_signature_for_builtin_compressor(self):
         from agent_inflight import reinject

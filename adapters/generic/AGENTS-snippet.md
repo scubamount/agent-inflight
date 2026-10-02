@@ -12,8 +12,9 @@ exposes a session id; without it entries are written untagged and
 A shared file lists what is open across all my agent sessions. Run
 `inflight path` to find it.
 
-- **Start of any repo/infra task:** read its `## Right now` section and run
-  `inflight sessions`. An entry for the same repo from an ACTIVE session means
+- **Start of any repo/infra task:** read the brief (`[inflight brief]` block
+  from the hooks; without hooks, run `inflight brief`) and run
+  `inflight sessions`. Read the full file only when an entry's detail matters. An entry for the same repo from an ACTIVE session means
   another agent is working there now: don't edit the same files. IDLE/ENDED
   entries with unfinished work can be picked up; verify on disk first.
 - **Treat entries as hypotheses.** Confirm the named commit/file/service

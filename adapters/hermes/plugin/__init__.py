@@ -15,12 +15,14 @@ transform_tool_result if the file changed, rewrite literal `[session $VAR]`
                       repo in the last 15 min, appends the collision warning
                       to the result, once per (session, repo). Informs only.
 
-pre_llm_call          after a context compaction (or on a resumed session),
-                      inject this session's OWN entries, scoped to its
-                      compression lineage, into the user turn (6 KB cap).
-                      Lineage comes from the built-in Hermes backend
-                      (read-only state.db), in-process. INFLIGHT_REINJECT=0
-                      turns this off.
+pre_llm_call          on a session's first turn, after a context compaction,
+                      and on a resumed session, inject the brief (brief.py)
+                      into the user turn: this session's own open entries in
+                      full (scoped to its compression lineage), one line per
+                      other open entry, 6 KB cap. Lineage and owner status
+                      come from the built-in backends (read-only state.db,
+                      hook state files), in-process. Subagent and cron runs
+                      get nothing. INFLIGHT_REINJECT=0 turns this off.
 
 The plugin makes no tool calls and no subprocesses, so it cannot re-enter the
 tool loop. It imports only agent-inflight's own stdlib modules: backend
@@ -43,7 +45,7 @@ _SRC = Path(os.path.realpath(__file__)).parents[3] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from agent_inflight import backends, entries, hook, paths, reinject, retag, safety, state  # noqa: E402
+from agent_inflight import backends, brief, entries, hook, paths, reinject, retag, safety, state  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -260,16 +262,12 @@ _seen_sig: Dict[str, str] = {}  # session_id -> last compaction signature seen t
 _SEEN_MAX = 512
 
 
-def _lineage(sid: str) -> List[str]:
-    # Built-in Hermes backend only, in-process and read-only. Third-party
-    # backend plugins are never imported into the Hermes process.
-    be = backends.HermesBackend()
-    return be.lineage(sid) if be.available() else [sid]
+_NO_BRIEF_PLATFORMS = {"subagent", "cron"}  # delegated children and scheduled jobs
 
 
 def on_pre_llm_call(session_id: str = "", conversation_history: Any = None,
-                    is_first_turn: bool = False, **_: Any) -> Optional[Dict[str, str]]:
-    if not session_id or os.environ.get("INFLIGHT_REINJECT", "1") == "0":
+                    is_first_turn: bool = False, platform: str = "", **_: Any) -> Optional[Dict[str, str]]:
+    if not session_id or os.environ.get("INFLIGHT_REINJECT", "1") == "0" or platform in _NO_BRIEF_PLATFORMS:
         return None
     try:
         sig = reinject.compaction_signature(conversation_history)
@@ -285,11 +283,12 @@ def on_pre_llm_call(session_id: str = "", conversation_history: Any = None,
             text = _target().read_text(encoding="utf-8")
         except OSError:
             return None
-        chain = _lineage(session_id)
-        mine = reinject.owned(text, chain)
-        if not mine:
-            return None
-        return {"context": reinject.render(mine, session_id, chain, reason)}
+        # Built-in backends only, in-process and read-only. Third-party
+        # backend plugins are never imported into the Hermes process.
+        be = backends.chain(plugins=False)
+        chain = be.lineage(session_id) if be is not None else [session_id]
+        out = brief.build(text, session_id, chain, reason, be)
+        return {"context": out} if out else None
     except Exception:
         logger.debug("agent-inflight pre_llm_call failed", exc_info=True)
         return None

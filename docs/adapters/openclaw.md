@@ -29,8 +29,8 @@ backends.
 | `session_start` | observe | `session-start` | `ctx.sessionId`; `source`: `resume` if the event has `resumedFrom`, else `new` | Docs: "has no reason field; it can include `resumedFrom`". |
 | `before_tool_call` | modify / gate | `pre-tool` | `event.toolName`, `ctx.sessionId` | **Fail-closed hook:** docs say a thrown error or timeout (15 s default) blocks the tool call. The handler must catch everything, return nothing (no `block`, no `params`), and bound the subprocess well under 15 s. Use the `matcher` option (canonical tool ids such as `exec`, `apply_patch`) to limit it to editing/shell tools. |
 | `after_tool_call` | observe | `post-tool` | same | |
-| `after_compaction` | observe | `session-start` with `source: compact` | `ctx.sessionId` | Re-inject text has to reach the model on the **next** turn; see open questions. |
-| `before_prompt_build` | modify | (delivery only) | | Returns `prependContext`/`appendContext`. A candidate for delivering the re-inject block and collision warning. Needs conversation access (below). |
+| `after_compaction` | observe | `session-start` with `source: compact` | `ctx.sessionId` | The brief has to reach the model on the **next** turn; see open questions. |
+| `before_prompt_build` | modify | (delivery only) | | Returns `prependContext`/`appendContext`. A candidate for delivering the brief and collision warning. Needs conversation access (below). |
 | `session_end` | observe | `session-end` | `ctx.sessionId`, `event.reason` | Reasons per docs: `new`, `reset`, `idle`, `daily`, `compaction`, `deleted`, `shutdown`, `restart`, `unknown`. `reason: compaction` is a rollover, not a dead session: map it to a lineage link, not ENDED (**unverified** which session id the successor carries). |
 
 There is no `cwd-changed` equivalent in the catalog; `cwd` would have to come
@@ -48,7 +48,7 @@ From the "Permissions and scope" section of the Plugin hooks page:
   agent-inflight's adapter rules, an installer would print the exact change
   and apply only on `--apply`.
 - `before_prompt_build` is also blocked by `allowPromptInjection: false`
-  (default allowed). Both permissions are needed for re-injection.
+  (default allowed). Both permissions are needed to deliver the brief.
 - `session_end` works **without** conversation access (metadata only). The
   adapter never needs `ctx.endedTranscript` and must not request it.
 - `before_tool_call`, `after_tool_call`, `session_start` and
@@ -56,7 +56,7 @@ From the "Permissions and scope" section of the Plugin hooks page:
   **Unverified** whether any other gate applies to them.
 
 Least-privilege variant: without conversation access the adapter still gets
-heartbeats, repo recording, `session-end` and catch-up, but no re-injection
+heartbeats, repo recording, `session-end` and catch-up, but no brief
 and no collision warning in the model's context. That should be the default
 install; conversation access opt-in.
 

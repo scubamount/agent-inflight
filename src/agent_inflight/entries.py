@@ -7,7 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import core, paths, progress, safety, trim
+from . import brief, core, paths, progress, safety, trim
 
 TEMPLATE = (Path(__file__).resolve().parent / "template.md")
 
@@ -191,6 +191,12 @@ def lint(text: str, max_bytes: int = trim.DEFAULT_MAX_BYTES) -> Tuple[str, List[
     summary = f"{size:,}B (~{size // 4:,} tok)"
     if rns:
         entries = rns[0].entries
+        hb = brief.headlines_bytes(entries)
+        if hb > brief.HEADLINES_MAX_BYTES:
+            findings.append(f"headlines {hb:,}B over the brief's budget {brief.HEADLINES_MAX_BYTES:,}B: "
+                            "sessions would not see every entry (`inflight done` finished work, or "
+                            "`inflight trim --apply`)")
+        summary += f", brief headlines {hb:,}B of {brief.HEADLINES_MAX_BYTES:,}B"
         undated = sum(1 for e in entries if e.date is None)
         untagged = sum(1 for e in entries if not e.session)
         literal = sum(1 for e in entries if core.LITERAL_TAG_RE.search(e.head))

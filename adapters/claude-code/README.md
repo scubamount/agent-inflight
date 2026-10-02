@@ -26,7 +26,7 @@ the marker `uninstall` uses to find inflight's handlers.
 
 - The hook command **always exits 0** and **never** returns a
   `permissionDecision`, so it can't block or approve a tool.
-- On `SessionStart` (resume/compact) and `PreToolUse` (collision warning), the
+- On `SessionStart` (the brief, every source) and `PreToolUse` (collision warning), the
   text for the model is returned as `hookSpecificOutput.additionalContext`
   JSON. Plain stdout is delivered to the model only on `SessionStart`.
 - `SessionStart` with `startup` or `clear` also runs the audit catch-up: owed

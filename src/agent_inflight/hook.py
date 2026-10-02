@@ -7,9 +7,8 @@ the tool, so any error is logged to hooks.log and swallowed (fail open).
 
   session-start {session_id, cwd, source: new|startup|resume|compact|clear}
       records the session; on new/startup runs the audit catch-up for ENDED
-      sessions (recorded repos only, ~3 s budget, at most every 10 min); on
-      resume/compact prints the session's own open entries (same block as
-      the Hermes re-inject)
+      sessions (recorded repos only, ~3 s budget, at most every 10 min);
+      then prints the brief (brief.py; same text the Hermes plugin injects)
   pre-tool      {session_id, cwd, tool, call_id}
       heartbeat; prints a collision warning, once per (session, repo), when
       another session with a heartbeat in the last ACTIVE window has touched
@@ -153,17 +152,13 @@ def handle(event: str, payload: Dict[str, Any]) -> str:
         if source in ("new", "startup", "clear"):
             from . import audit
             audit.catch_up()  # bounded, rate-limited, never raises; writes only for DEAD sessions
-        if source not in ("resume", "compact"):
-            return ""
-        from . import reinject
+        from . import backends, brief
         try:
             text = paths.inflight_file().expanduser().read_text(encoding="utf-8")
         except OSError:
             return ""
-        mine = reinject.owned(text, [sid])
-        if not mine:
-            return ""
-        return reinject.render(mine, sid, [sid], "compaction" if source == "compact" else "resume")
+        reason = {"compact": "compaction", "resume": "resume"}.get(source, "session start")
+        return brief.build(text, sid, [sid], reason, backends.chain(plugins=False))
 
     state.update(sid, repo=repo)  # post-tool, cwd-changed, heartbeat
     return ""

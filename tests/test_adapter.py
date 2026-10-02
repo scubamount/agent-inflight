@@ -235,6 +235,17 @@ class WireFormat(Env):
         self.run_hook("session-start", {"session_id": "cc-1", "cwd": str(repo), "source": "startup"})
         self.assertEqual(state.load("cc-1").get("harness"), "claude-code")
 
+    def test_session_start_startup_is_additional_context(self):
+        (self.t / "home" / "inflight.md").write_text(
+            "## Right now\n\n**2026-10-01 10:00 [session cc-5 #abcdef] — mine.** x\n\n"
+            "**2026-10-01 09:00 [session other #fedcba] — theirs.** detail\n")
+        rc, out = self.run_hook("session-start", {"session_id": "cc-5", "source": "startup"})
+        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("[inflight brief: session start]", ctx)
+        self.assertIn("mine.** x", ctx)
+        self.assertIn("theirs.", ctx)
+        self.assertNotIn("detail", ctx)
+
     def test_session_start_compact_is_additional_context(self):
         (self.t / "home" / "inflight.md").write_text(
             "## Right now\n\n**2026-10-01 10:00 [session cc-2 #abcdef] — mine.** x\n")
@@ -247,7 +258,7 @@ class WireFormat(Env):
         (self.t / "home" / "inflight.md").write_text(
             "## Right now\n\n**2026-10-01 10:00 [session cc-3 #abcdef] — mine.** x\n")
         rc, out = self.run_hook("session-start", {"session_id": "cc-3", "source": "compact"}, harness=None)
-        self.assertTrue(out.startswith("[inflight: your open entries"))
+        self.assertTrue(out.startswith("[inflight brief: compaction]"))
 
     def test_session_end_through_hook_run_marks_ended(self):
         repo = self.t / "r3"

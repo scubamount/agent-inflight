@@ -4,7 +4,7 @@ There are three ways in. Pick the first one that fits:
 
 | You want to | Use | Code in this repo? |
 |---|---|---|
-| Make a new harness (agent CLI, IDE, gateway) tag entries, heartbeat, get collision warnings and re-injection | **Hook protocol** (§1) | None. Your harness runs a command. |
+| Make a new harness (agent CLI, IDE, gateway) tag entries, heartbeat, get collision warnings and the brief | **Hook protocol** (§1) | None. Your harness runs a command. |
 | Make `inflight sessions` know whether *your harness's* session ids are ACTIVE, IDLE or ENDED | **Backend plugin** (§2) | None. A separate Python package with an entry point. |
 | Ship a one-command installer that wires §1 into a harness's config | **Adapter** (§3) | v1 has no adapter plugin API. Write your own installer, or send a PR. |
 

@@ -19,7 +19,8 @@ shared Markdown tracker of in-flight agent work. It is not a pip package:
 | `src/agent_inflight/core.py`, `entries.py`, `progress.py` | Parser, `add`, `done`, `check`, and entry state |
 | `src/agent_inflight/trim.py` | Budget, pause and archive policy (its docstring is the spec) |
 | `src/agent_inflight/sessions.py`, `backends.py`, `plugins.py` | Status lookup, built-in backends, plugin allowlist |
-| `src/agent_inflight/hook.py`, `state.py`, `reinject.py` | Hook protocol v1, per-session state, re-inject block |
+| `src/agent_inflight/hook.py`, `state.py` | Hook protocol v1, per-session state |
+| `src/agent_inflight/brief.py`, `reinject.py` | The session brief, and when Hermes delivers it |
 | `src/agent_inflight/audit.py`, `safegit.py` | Owed-work audit; the only way git is run |
 | `src/agent_inflight/safety.py` | Locks, atomic private writes, forge and credential checks |
 | `src/agent_inflight/adapter_claude.py` | Claude Code settings merge |

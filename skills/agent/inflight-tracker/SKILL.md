@@ -1,7 +1,7 @@
 ---
 name: inflight-tracker
 description: Shared cross-session work tracker; read at start, update at end.
-version: 1.0.1
+version: 1.1.0
 author: scubamount, Hermes Agent
 license: Apache-2.0
 platforms: [linux, macos]
@@ -31,6 +31,7 @@ and whether it is still running, and trims the file so it stays cheap to load.
 ## Quick Reference
 
 ```bash
+inflight brief                        # what this session got at start: own entries + headlines
 inflight path                         # which file
 inflight sessions                     # owner + ACTIVE/IDLE/ENDED + progress per entry
 inflight sessions --children          # + delegated subagent sessions (resume handles)
@@ -48,8 +49,11 @@ inflight trim                         # dry run; --apply pauses stale, archives 
 
 ### Start
 
-1. `read_file` the path from `inflight path`, section `## Right now` only.
-   Done when you know every entry touching the repo/service you're about to work on.
+1. Read the brief: the `[inflight brief: session start]` block the plugin or
+   hook injected (no block: `terminal(command="inflight brief")`). Your own
+   entries are in full; other sessions' are one line each. Done when you
+   know every entry touching the repo/service you're about to work on. Read
+   the full file (`inflight path`) only when another entry's detail matters.
 2. `terminal(command="inflight sessions")`. Done when each relevant entry has a status.
 3. Act on status:
    | Status | Do |

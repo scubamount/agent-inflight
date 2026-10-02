@@ -1,8 +1,12 @@
-"""Keep the inflight file small enough to ride along on every turn.
+"""Keep the inflight file bounded.
 
-The file is read into the agent's context at session start (and on Hermes
-every turn once referenced), so its size is a recurring token bill. Left
-alone it grows without bound: every session appends, nobody deletes.
+Sessions are given the brief (brief.py), not the file: their own entries in
+full plus one headline per other open entry. So two budgets apply. The
+headlines of all open entries must fit the brief (brief.HEADLINES_MAX_BYTES),
+or a session that owns nothing would not see every entry. The file itself
+has a soft cap (--max-bytes, --max-lines) so it stays cheap to read in full
+when an agent needs an entry's detail. Left alone it grows without bound:
+every session appends, nobody deletes.
 
 Policy, applied to `## Right now`. Each entry has a lifecycle state (see
 progress.py): active (default), paused, done.
@@ -12,7 +16,8 @@ progress.py): active (default), paused, done.
              newer of its head date and its session's last activity, so a
              session still at work keeps its entry active.
   2. done:   DONE entries older than --done-grace-days are archived.
-  3. budget: while over --max-bytes or --max-lines, archive in this order:
+  3. budget: while the headlines are over the brief's budget, or the file
+             is over --max-bytes or --max-lines, archive in this order:
              done (oldest first), then paused (longest-paused first), then
              active (oldest first). The newest --min-entries entries that
              are not done are never archived for budget.
@@ -39,11 +44,11 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from . import core, paths, progress, safety
+from . import brief, core, paths, progress, safety
 
 DEFAULT_DAYS = 7
-DEFAULT_MAX_BYTES = 24_000  # ~6k tokens
-DEFAULT_MAX_LINES = 80
+DEFAULT_MAX_BYTES = 64_000  # soft cap on the file; sessions read the brief, not the file
+DEFAULT_MAX_LINES = 200
 DEFAULT_MIN_ENTRIES = 3
 DEFAULT_STALE_DAYS = 3
 DEFAULT_DONE_GRACE_DAYS = 1
@@ -98,18 +103,18 @@ def plan(text: str, today: date, days: int, max_bytes: int, max_lines: int, min_
             def size(items, s=s):
                 sec = core.Section(s.header, s.lead, [e for _, e in items])
                 r = sec.render()
-                return len(r.encode()), r.count("\n")
+                return len(r.encode()), r.count("\n"), brief.headlines_bytes(sec.entries)
 
             live = [x for x in keep if progress.lifecycle(x[1].text).state != "done"]
             newest = sorted(live, key=lambda x: (x[1].date or date.min, -x[0]))
             protected = {i for i, _ in newest[-min_entries:]} if min_entries > 0 else set()
             evictable = sorted((x for x in keep if x[0] not in protected), key=lambda x: _order(x[1], x[0]))
-            b, n = size(keep)
-            while (b > max_bytes or n > max_lines) and evictable:
+            b, n, h = size(keep)
+            while (b > max_bytes or n > max_lines or h > brief.HEADLINES_MAX_BYTES) and evictable:
                 victim = evictable.pop(0)
                 keep.remove(victim)
                 out.archived.append(victim[1].text)
-                b, n = size(keep)
+                b, n, h = size(keep)
             keep.sort(key=lambda x: x[0])
             kept_sections.append(core.Section(s.header, s.lead, [e for _, e in keep]))
             continue

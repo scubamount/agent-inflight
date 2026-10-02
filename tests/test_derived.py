@@ -267,5 +267,55 @@ class DoneAndTrim(unittest.TestCase):
         self.assertNotIn("status:", self.f.read_text())
 
 
+class Brief(unittest.TestCase):
+    """The brief CLI, and the headline budget that trim and check hold the file to."""
+
+    def setUp(self):
+        self._t = tempfile.TemporaryDirectory()
+        self.home = Path(self._t.name)
+        self.f = self.home / "inflight.md"
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def entries(self, n: int, sid: str = "OTHER", body: str = "detail") -> str:
+        return "\n\n".join(f"**2026-09-{1 + i % 28:02d} 10:00 [session {sid}{i} #{i:06x}] — thing {i}: "
+                           + "w" * 80 + f".** {body}" for i in range(n))
+
+    def test_cli_own_full_others_one_line(self):
+        self.f.write_text("## Right now\n\n**2026-10-01 10:00 [session ME #aaaaaa] — mine.** my body\n\n"
+                          + self.entries(3) + "\n")
+        rc, out = run(self.home, "brief", sid="ME")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("[inflight brief: session start]", out)
+        self.assertIn("mine.** my body", out)
+        self.assertIn("#000002 ", out)
+        self.assertNotIn(" detail", out)
+
+    def test_cli_nothing_open(self):
+        self.f.write_text("## Right now\n\n")
+        self.assertEqual(run(self.home, "brief", sid="ME"), (0, "nothing open\n"))
+
+    def test_trim_holds_headlines_to_brief_budget(self):
+        from agent_inflight import brief, core, trim
+        text = "## Right now\n\n" + self.entries(80, body="x" * 50) + "\n"
+        rn = core.right_now(core.parse(text))
+        self.assertGreater(brief.headlines_bytes(rn.entries), brief.HEADLINES_MAX_BYTES)
+        self.assertLess(len(text.encode()), trim.DEFAULT_MAX_BYTES)  # the file cap alone would keep all 80
+        p = trim.plan(text, date(2026, 10, 1), 7, trim.DEFAULT_MAX_BYTES, trim.DEFAULT_MAX_LINES, 3,
+                      stale_days=365)
+        kept = core.right_now(core.parse(p.text)).entries
+        self.assertLessEqual(brief.headlines_bytes(kept), brief.HEADLINES_MAX_BYTES)
+        self.assertTrue(p.archived)
+        self.assertEqual(len(kept) + len(p.archived), 80)  # count in == count out
+
+    def test_check_flags_headlines_over_budget(self):
+        self.f.write_text("## Right now\n\n" + self.entries(80) + "\n")
+        self.f.chmod(0o600)
+        rc, out = run(self.home, "check")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("over the brief's budget", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

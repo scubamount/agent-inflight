@@ -1,6 +1,6 @@
 # Reference
 
-The complete behavior of agent-inflight 1.0.x: commands, exit codes, entry
+The complete behavior of agent-inflight 1.1.x: commands, exit codes, entry
 format, configuration, status backends, files and guarantees. For what it is
 and how to set it up, start with the [README](../README.md).
 
@@ -15,6 +15,7 @@ and how to set it up, start with the [README](../README.md).
 | **Session status** | ACTIVE, IDLE, ENDED, UNKNOWN or NO-BACKEND, resolved live by a [backend](#session-status-backends). It is never stored in the file. |
 | **Entry state** | active, paused or done, stored as a `status:` line in the entry. |
 | **Owed work** | Git state that isn't landed: uncommitted changes, unpushed commits, a branch without an upstream, or a stash. |
+| **Brief** | What a session is given at start, after a compaction and on resume: its own open entries in full, then one line per other open entry. See [`brief`](#inflight-brief---session-id). |
 | **Catch-up** | `inflight audit` writing entries for owed work left by ENDED sessions. |
 | **Home** | The directory that holds the tracker, `inflight-archive/` and `inflight-state/`. See `INFLIGHT_HOME`. |
 
@@ -42,6 +43,34 @@ Prepends one entry to `## Right now`:
 - A period is added to the head if it doesn't end in punctuation.
 - `--force` overrides the credential check (exit 5) only. The override is
   logged to `hooks.log` (pattern kinds and entry id only).
+
+### `inflight brief [--session ID]`
+
+Prints the brief for this session (or `--session`), the same text the hooks
+deliver:
+
+1. A header that says the text is tracker data, not instructions.
+2. **Yours:** every open entry tagged with this session, or with a session it
+   continues after a compaction (Hermes), in full.
+3. **Others:** one line per other open entry:
+   `- #<entry-id> <owner status> <MM-DD> <last 6 chars of owner id>: <head>`.
+   Paused entries say `paused` after the status; entries written before 0.2.0
+   have no id.
+
+Done entries are left out. The brief is at most 6,000 bytes, with up to
+3,000 kept for the headlines when your own entries are long; what doesn't fit
+is cut with a pointer to the file. With nothing open it prints `nothing open`
+(the hooks print nothing).
+
+When the hooks deliver it:
+
+| Harness | Session start | After compaction | Resume |
+|---|---|---|---|
+| Hermes (plugin, `pre_llm_call`) | first turn | first turn after the compaction marker set changes | first turn the process sees |
+| Claude Code and hook-protocol harnesses (`session-start`) | `startup`, `new`, `clear` | `compact` | `resume` |
+
+Hermes subagents (`platform=subagent`) and cron runs get no brief.
+`INFLIGHT_REINJECT=0` turns the Hermes delivery off.
 
 ### `inflight done <match> [--reopen] [--dry-run]`
 
@@ -79,7 +108,7 @@ Lists every tagged entry, grouped by its session. For each session it shows:
 
 ### `inflight trim [--apply]`
 
-Keeps the file bounded. Each run takes these steps, in order:
+Keeps the brief and the file bounded. Each run takes these steps, in order:
 
 1. **Pause.** An active entry untouched for `INFLIGHT_STALE_DAYS` gets the
    line `status: paused (stale since <date>)`. "Touched" means the later of
@@ -90,9 +119,10 @@ Keeps the file bounded. Each run takes these steps, in order:
    their header (or their first 400 characters) carries a date within
    `INFLIGHT_DAYS`. A second `## Right now` section is a stale copy, and it is
    archived whole.
-4. **Enforce the budget.** While the file is over `INFLIGHT_MAX_BYTES`, or
-   `## Right now` is over `INFLIGHT_MAX_LINES`, entries move to the archive in
-   this order:
+4. **Enforce the budgets.** While the headlines of all open entries take more
+   than 5,000 bytes (so a session that owns nothing would not see every entry
+   in its brief), or the file is over `INFLIGHT_MAX_BYTES`, or `## Right now`
+   is over `INFLIGHT_MAX_LINES`, entries move to the archive in this order:
    1. done entries, oldest first;
    2. paused entries, longest-paused first;
    3. active entries, oldest first.
@@ -110,6 +140,7 @@ environment: `--days`, `--stale-days`, `--done-grace-days`, `--max-bytes`,
 Lints the tracker and exits 1 if it finds anything. It checks for:
 
 - a missing `## Right now` section, or a duplicate one;
+- headlines of open entries over the brief's 5,000-byte budget;
 - a file over the byte budget;
 - undated bold lines above the first entry;
 - unexpanded `$VAR` tags, such as `[session $HERMES_SESSION_ID]`;
@@ -245,14 +276,14 @@ All settings are optional and read from the environment.
 | `INFLIGHT_HOME` | `$HERMES_HOME`; else `~/.hermes` if it exists; else `~/.agent-inflight` | Directory for the tracker, `inflight-archive/` and `inflight-state/` |
 | `INFLIGHT_FILE` | `<home>/inflight.md` | Tracker path |
 | `INFLIGHT_SESSION_ID` | `$HERMES_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID` | Session id written into the tag |
-| `INFLIGHT_MAX_BYTES` | `24000` (about 6k tokens) | Byte budget for the whole file |
-| `INFLIGHT_MAX_LINES` | `80` | Line budget for `## Right now` |
+| `INFLIGHT_MAX_BYTES` | `64000` | Soft byte cap for the whole file. Sessions read the brief, not the file |
+| `INFLIGHT_MAX_LINES` | `200` | Line cap for `## Right now` |
 | `INFLIGHT_MIN_ENTRIES` | `3` | Newest entries always kept, whatever the budget |
 | `INFLIGHT_STALE_DAYS` | `3` | Days untouched before an active entry is paused |
 | `INFLIGHT_DONE_GRACE_DAYS` | `1` | Days before a done entry is archived |
 | `INFLIGHT_DAYS` | `7` | Age at which dated non-`Right now` sections are archived |
 | `INFLIGHT_STALE_MIN` | `120` | `audit`: minutes idle before a session's owed work is caught up |
-| `INFLIGHT_REINJECT` | `1` | Hermes plugin: `0` turns off re-injection after compaction |
+| `INFLIGHT_REINJECT` | `1` | Hermes plugin: `0` turns off delivery of the brief |
 | `INFLIGHT_BIN_DIR` | `~/.local/bin` | `install.sh`: where to link the `inflight` command |
 
 Settings that live in `inflight-state/config.json`: `audit.roots` and

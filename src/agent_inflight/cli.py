@@ -10,6 +10,7 @@ USAGE = f"""inflight {__version__} — shared work tracker for agent sessions
 
   inflight init                 create the file if missing
   inflight add "<head>" [body]  prepend a dated, session-tagged entry
+  inflight brief                what a session gets at start: own entries + headlines
   inflight sessions [--json] [--children]
                                 who owns each entry; ACTIVE / IDLE / ENDED; progress
   inflight me                   print this session's tag
@@ -45,6 +46,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if cmd == "adapter":
         from . import adapter_claude
         return adapter_claude.main(argv)
+    if cmd == "brief":
+        from . import brief
+        return brief.main(argv)
     from . import entries, sessions, trim
     table = {
         "init": entries.init_main,
