@@ -2,7 +2,31 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 1.2.0
+## 1.2.1
+
+Fixes found by watching a long-running Hermes session through a day of
+update cycles.
+
+### Fixed
+
+- **One repo, two spellings.** On macOS `~/Code/x` and `~/code/x` are the
+  same directory, but repos were recorded as written, so two sessions in one
+  repo were not warned about each other and `audit` wrote two entries for
+  it. Repos are now recorded and compared by canonical path (symlinks
+  resolved, on-disk case). Entries written under the old spelling are matched
+  by their `repo:` line; when a newer session owns the repo, the older entry
+  is marked done.
+- **Brief re-sent after every restart.** A Hermes restart forgot which
+  sessions had their brief, so each restart sent the whole brief again,
+  labelled `compaction`. The plugin now checks the history: a brief after the
+  last compaction marker means the session still has it. Otherwise it is
+  sent, labelled `resume`.
+- **"After this session ended" on sessions that hadn't.** Audit entries now
+  say `session ended <time>` or `session idle since <time>`.
+- **Old local branches counted as owed work.** A branch with no upstream
+  whose last commit predates the owning session is listed on its own line,
+  not as an open checkbox.
+
 
 Read the history back, and say what an entry is waiting on.
 

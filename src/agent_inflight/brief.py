@@ -14,6 +14,9 @@ Done entries are left out. The brief is capped at BRIEF_MAX_BYTES. The full
 file stays on disk; `inflight path` names it for when an entry's detail
 matters.
 
+A Hermes restart forgets which sessions it has seen; a session whose history
+already holds a brief since its last compaction gets none (reinject.py).
+
 Harnesses deliver it: the Hermes plugin through `pre_llm_call`, Claude Code
 and other hook-protocol harnesses through `inflight hook session-start`.
 `inflight brief` prints the same text.

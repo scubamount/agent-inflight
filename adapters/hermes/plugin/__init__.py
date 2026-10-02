@@ -276,7 +276,7 @@ def on_pre_llm_call(session_id: str = "", conversation_history: Any = None,
             if prev is None and len(_seen_sig) >= _SEEN_MAX:
                 _seen_sig.pop(next(iter(_seen_sig)))
             _seen_sig[session_id] = sig
-        reason = reinject.decide(prev, sig, bool(is_first_turn))
+        reason = reinject.decide(prev, sig, bool(is_first_turn), conversation_history)
         if reason is None:
             return None
         try:

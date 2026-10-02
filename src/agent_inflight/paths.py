@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -26,6 +27,27 @@ def inflight_file() -> Path:
     if os.environ.get("INFLIGHT_FILE"):
         return Path(os.environ["INFLIGHT_FILE"]).expanduser()
     return home() / "inflight.md"
+
+
+def canonical(path: str) -> str:
+    """`path` with symlinks resolved and, on macOS, each component in its
+    on-disk case. APFS and HFS+ are case-insensitive by default, so
+    `~/Code/x` and `~/code/x` are one repo; realpath keeps whatever case it
+    was given, and the same repo was recorded (and audited) twice. Falls back
+    to realpath when the path can't be opened."""
+    real = os.path.realpath(os.path.expanduser(path))
+    if sys.platform != "darwin":
+        return real
+    try:
+        import fcntl
+        fd = os.open(real, os.O_RDONLY)
+        try:
+            raw = fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024)
+        finally:
+            os.close(fd)
+        return raw.split(b"\0", 1)[0].decode("utf-8", "surrogateescape") or real
+    except (OSError, AttributeError, ValueError):
+        return real
 
 
 def archive_dir(for_file: Path) -> Path:

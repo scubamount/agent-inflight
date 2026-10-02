@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "bin" / "inflight"
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent_inflight import audit, core, hook, progress, safegit, state  # noqa: E402
+from agent_inflight import audit, core, hook, paths, progress, safegit, state  # noqa: E402
 
 SCRUB = ("HERMES_HOME", "HERMES_ROOT", "INFLIGHT_FILE", "HERMES_SESSION_ID", "INFLIGHT_SESSION_ID",
          "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "INFLIGHT_HOME", "PYTHONPATH")
@@ -90,6 +90,7 @@ class World(unittest.TestCase):
         p = state.session_path(sid)
         d = json.loads(p.read_text())
         d["heartbeat_at"] = time.time() - idle_s
+        d["started_at"] = time.time() - idle_s - 3600  # began before the fixture's commits
         if ended:
             d["ended_at"] = time.time() - idle_s
             d["end_reason"] = "end"
@@ -295,6 +296,26 @@ class Classify(World):
         self.assertEqual([s for s, _, _ in plan.catch_up], ["idle-1"])
 
 
+class LocalBranches(World):
+    def test_old_branch_without_upstream_is_listed_not_owed(self):
+        r = mkrepo(self.code / "lb", self.remote)
+        git(r, "checkout", "-q", "-b", "old-backup")
+        (r / "o.txt").write_text("o\n")
+        git(r, "add", "-A")
+        env_date = {"GIT_COMMITTER_DATE": "2020-01-01T00:00:00", "GIT_AUTHOR_DATE": "2020-01-01T00:00:00"}
+        subprocess.run(["git", *GIT_ID, "commit", "-qm", "old"], cwd=str(r), check=True,
+                       env={**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, **env_date})
+        git(r, "checkout", "-q", "main")
+        git(r, "checkout", "-q", "-b", "fresh")
+        (r / "f.txt").write_text("f\n")
+        git(r, "add", "-A")
+        git(r, "commit", "-qm", "fresh")
+        rs = audit.inspect(str(r), since=time.time() - 3600)
+        self.assertEqual(rs.unshared, [("old-backup", "1")])
+        self.assertEqual(rs.findings, ["1 unpushed commit(s) on fresh (no upstream)"])
+        self.assertEqual(len(audit.inspect(str(r)).findings), 2)  # no session start: all owed
+
+
 class Unpushed(World):
     def test_stale_upstream_is_a_note_not_owed_work(self):
         """hermes-agent-fork shape: main tracks origin (stale) but every commit is on `upstream`."""
@@ -466,6 +487,40 @@ class Apply(World):
         self.assertEqual(progress.lifecycle(es[0].text).state, "done")
         c = audit.apply(audit.build(), self.tracker)
         self.assertEqual(c["done"], 0)  # idempotent
+
+    def test_entry_says_idle_not_ended(self):
+        r = mkrepo(self.code / "idle", self.remote)
+        (r / "a.txt").write_text("x\n")
+        self.session("idle-9", [r], idle_s=3 * 3600)
+        audit.apply(audit.build(stale_min=120), self.tracker)
+        e = next(e for e in self.entries() if e.session == "idle-9")
+        self.assertIn("(session idle since ", e.text)
+        self.assertNotIn("ended", e.text)
+        self.assertIn("(session ended ", next(e for e in self.entries() if e.session == "dead-1").text)
+
+    def test_case_variant_spellings_are_one_repo(self):
+        """macOS: ~/Code/x and ~/code/x are one directory. One entry, and an
+        older entry under the other spelling is closed, not duplicated."""
+        if sys.platform != "darwin":
+            self.skipTest("case-insensitive filesystem")
+        flipped = str(self.r).replace("/proj", "/PROJ")
+        self.assertEqual(paths.canonical(flipped), paths.canonical(str(self.r)))
+        self.session("dead-2", [flipped], ended=True)
+        rec = audit.recorded()
+        self.assertEqual(list(rec["dead-2"]), [paths.canonical(str(self.r))])
+        audit.apply(audit.build(), self.tracker)
+        open_ = [e for e in self.entries() if progress.lifecycle(e.text).state != "done"]
+        self.assertEqual(len(open_), 1, [e.head for e in self.entries()])
+
+    def test_duplicate_entry_for_same_repo_closed(self):
+        """An entry another session got for this repo (written before 1.2.1,
+        under a different spelling) is closed once a newer recorder owns it."""
+        audit.apply(audit.build(), self.tracker)
+        old = self.entries()[0]
+        self.session("dead-3", [self.r], ended=True)  # newer recorder of the same repo
+        audit.apply(audit.build(), self.tracker)
+        by = {e.session: progress.lifecycle(e.text).state for e in self.entries()}
+        self.assertEqual(by, {"dead-1": "done", "dead-3": "active"}, old.head)
 
     def test_reopen_when_work_returns(self):
         audit.apply(audit.build(), self.tracker)

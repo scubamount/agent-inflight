@@ -89,8 +89,8 @@ def _collisions(sid: str, repo: str) -> List[str]:
     for other, d in state.recent(ACTIVE_WINDOW_S):
         if other == sid or d.get("ended_at"):
             continue
-        if repo not in (d.get("repos") or {}):
-            continue
+        if repo not in {paths.canonical(r) for r in (d.get("repos") or {})}:
+            continue  # recorded spellings from before 1.2.1 may differ in case
         if d.get("harness") == "hermes":
             if not looked:
                 be, looked = backends.chain(plugins=False), True
@@ -106,7 +106,7 @@ def collision_warning(sid: str, repo: str, event: str = "pre-tool") -> str:
     `repo` recently, or ''. Shared by the hook and the Hermes plugin. It only
     informs: nothing here allows, denies or delays a tool call."""
     others = _collisions(sid, repo)
-    if not others or repo in (state.load(sid).get("warned") or []):
+    if not others or repo in {paths.canonical(w) for w in (state.load(sid).get("warned") or [])}:
         return ""
     state.update(sid, warned=repo)
     state.log("collision-warning", event=event, session=sid)

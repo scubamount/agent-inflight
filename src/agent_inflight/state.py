@@ -105,8 +105,9 @@ def recent(within_s: float) -> Iterator[Tuple[str, Dict[str, Any]]]:
 
 
 def repo_root(cwd: Any) -> Optional[str]:
-    """Nearest ancestor of `cwd` holding `.git` (dir or file). Filesystem only:
-    no git process runs here, so a hostile repo config can't execute."""
+    """Nearest ancestor of `cwd` holding `.git` (dir or file), in canonical
+    form (paths.canonical). Filesystem only: no git process runs here, so a
+    hostile repo config can't execute."""
     if not isinstance(cwd, str) or not cwd:
         return None
     try:
@@ -115,7 +116,7 @@ def repo_root(cwd: Any) -> Optional[str]:
         return None
     for d in (p, *p.parents):
         if (d / ".git").exists():
-            return str(d)
+            return paths.canonical(str(d))
     return None
 
 

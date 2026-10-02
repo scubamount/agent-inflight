@@ -218,6 +218,24 @@ class Reinject(TmpHome):
         out = self.turn("TIP", [{"role": "user", "content": "earlier"}], first=False)
         self.assertIn("[inflight brief: resume]", out["context"])
 
+    def test_resumed_after_compaction_is_resume(self):
+        out = self.turn("TIP", [{"role": "user", "content": LCM}], first=False)
+        self.assertIn("[inflight brief: resume]", out["context"])
+
+    def test_restart_with_brief_in_history_is_silent(self):
+        """A Hermes restart forgets seen sessions; the brief already in the
+        history (api_content sidecar) since the last compaction is enough."""
+        hist = [{"role": "user", "content": LCM},
+                {"role": "user", "content": "go", "api_content": "go\n\n[inflight brief: compaction]\nx"}]
+        self.assertIsNone(self.turn("TIP", hist, first=False))
+
+    def test_restart_brief_before_compaction_or_in_tool_output_injects(self):
+        stale = [{"role": "user", "content": "go", "api_content": "go\n\n[inflight brief: session start]\nx"},
+                 {"role": "user", "content": LCM}]
+        self.assertIn("[inflight brief: resume]", self.turn("TIP", stale, first=False)["context"])
+        tool = [{"role": "tool", "content": "[inflight brief: session start]\n..."}]
+        self.assertIn("[inflight brief: resume]", self.turn("OLD", tool, first=False)["context"])
+
     def test_subagent_and_cron_get_nothing(self):
         self.assertIsNone(self.turn("SUB", [], first=True, platform="subagent"))
         self.assertIsNone(self.turn("SUB", [{"role": "user", "content": LCM}], platform="subagent"))

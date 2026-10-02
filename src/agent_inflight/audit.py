@@ -12,7 +12,7 @@ How each finding is used:
 
   catch-up   a recorded repo with owed work whose LAST recording session is
              ENDED, or IDLE longer than --stale-min (default 120). One entry
-             per (session, repo), tagged with the DEAD session's id, written
+             per repo, tagged with the DEAD session's id, written
              under `## Right now` with --apply. Re-running updates the same
              entry in place; once the repo is clean the entry is marked done,
              never deleted. Taking the work over stays explicit
@@ -32,6 +32,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -109,6 +110,7 @@ class RepoState:
     findings: List[str] = field(default_factory=list)  # owed work
     notes: List[str] = field(default_factory=list)     # informational, never owed
     merged: List[Tuple[str, str, str]] = field(default_factory=list)  # (branch, count, default ref)
+    unshared: List[Tuple[str, str]] = field(default_factory=list)  # (branch, count): no upstream, older than the owner
     error: Optional[str] = None
 
     @property
@@ -148,7 +150,11 @@ def _already_on(g: Any, default: Optional[str], branch: str) -> bool:
     return out == "0"
 
 
-def inspect(repo: str, timeout: float = 5.0) -> RepoState:
+def inspect(repo: str, timeout: float = 5.0, since: Optional[float] = None) -> RepoState:
+    """Owed work in one repo. `since` is the owning session's start: a branch
+    with no upstream whose newest commit is older than that was not made by
+    the session, so it goes to `unshared` (listed, not owed). Without `since`
+    every unpushed branch is owed."""
     rs = RepoState(repo)
     try:
         neutral = neutralizers(Path(repo), timeout)
@@ -163,9 +169,10 @@ def inspect(repo: str, timeout: float = 5.0) -> RepoState:
         if has_remote:
             ignore = ignore_branches()
             default = _default_ref(g)
-            for line in g("for-each-ref", "--format=%(refname:short)\t%(upstream)\t%(upstream:track)",
+            for line in g("for-each-ref",
+                          "--format=%(refname:short)\t%(upstream)\t%(upstream:track)\t%(committerdate:unix)",
                           "refs/heads").splitlines():
-                name, upstream, track = (line.split("\t") + ["", ""])[:3]
+                name, upstream, track, tip = (line.split("\t") + ["", "", ""])[:4]
                 if not name or any(fnmatch.fnmatchcase(name, pat) for pat in ignore):
                     continue
                 # Unpushed = on NO remote-tracking ref. Ahead-of-upstream alone overcounts
@@ -173,6 +180,9 @@ def inspect(repo: str, timeout: float = 5.0) -> RepoState:
                 n = g("rev-list", "--count", f"refs/heads/{name}", "--not", "--remotes").strip()
                 if n and n != "0" and _already_on(g, default, name):
                     rs.merged.append((_redact(name), n, (default or "").replace("refs/remotes/", "")))
+                elif n and n != "0" and not upstream and since is not None and tip.isdigit() \
+                        and int(tip) < since:
+                    rs.unshared.append((_redact(name), n))
                 elif n and n != "0":
                     rs.findings.append(f"{n} unpushed commit(s) on {_redact(name)}"
                                        + ("" if upstream else " (no upstream)"))
@@ -195,8 +205,14 @@ def recorded() -> Dict[str, Dict[str, float]]:
     out: Dict[str, Dict[str, float]] = {}
     for sid, d in state.recent(10 ** 10):
         repos = d.get("repos") or {}
-        if isinstance(repos, dict):
-            out[sid] = {r: float(t) for r, t in repos.items() if isinstance(r, str) and isinstance(t, (int, float))}
+        if not isinstance(repos, dict):
+            continue
+        merged: Dict[str, float] = {}
+        for r, t in repos.items():
+            if isinstance(r, str) and isinstance(t, (int, float)):
+                c = paths.canonical(r)  # spellings recorded before 1.2.1 can differ in case
+                merged[c] = max(merged.get(c, 0.0), float(t))
+        out[sid] = merged
     return out
 
 
@@ -222,11 +238,11 @@ class Plan:
     unowned: List[RepoState] = field(default_factory=list)
     clean: int = 0
     errors: List[RepoState] = field(default_factory=list)
-    resolved: List[str] = field(default_factory=list)                        # repos now clean
-    resolved_ids: set = field(default_factory=set)                           # audit entry ids to close
+    resolved: List[str] = field(default_factory=list)                        # repos now clean (canonical)
     truncated: bool = False                                                  # hit the deadline
     noted: List[RepoState] = field(default_factory=list)                     # clean, with notes
     merged_repos: List[RepoState] = field(default_factory=list)              # any branch already on default
+    unshared_repos: List[RepoState] = field(default_factory=list)               # older local-only branches
 
     def as_dict(self) -> Dict[str, Any]:
         return {"catch_up": [{"session": s, "repo": r.repo, "findings": r.findings, "status": st}
@@ -239,6 +255,8 @@ class Plan:
                 "already_on_default": [{"repo": r.repo, "branches": [{"branch": b, "commits": n, "default": d}
                                                                      for b, n, d in r.merged]}
                                        for r in self.merged_repos],
+                "local_branches": [{"repo": r.repo, "branches": [{"branch": b, "commits": n} for b, n in r.unshared]}
+                                   for r in self.unshared_repos],
                 "notes": [{"repo": r.repo, "notes": r.notes} for r in self.noted],
                 "clean": self.clean, "errors": [{"repo": r.repo, "error": r.error} for r in self.errors],
                 "resolved": self.resolved, "truncated": self.truncated}
@@ -250,8 +268,10 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
     be = backends.chain() if be is None else (be or None)
     rec = recorded()
     status_of: Dict[str, str] = {}
+    info_of: Dict[str, Any] = {}
     for sid in rec:
         info = be.lookup(sid) if be else None
+        info_of[sid] = info or {}
         status_of[sid] = classify(info, stale_min)
     # owner of each recorded repo: an ACTIVE recorder wins; else the latest recorder
     owner: Dict[str, Tuple[str, float]] = {}
@@ -262,7 +282,7 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
                 active[repo] = sid
             if repo not in owner or ts > owner[repo][1]:
                 owner[repo] = (sid, ts)
-    candidates = list(dict.fromkeys(list(owner) + ([str(p) for r, d in roots() for p in scan(r, d)]
+    candidates = list(dict.fromkeys(list(owner) + ([paths.canonical(str(p)) for r, d in roots() for p in scan(r, d)]
                                                    if use_roots else [])))
     plan = Plan()
     for repo in candidates:
@@ -277,7 +297,8 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
             continue
         if not Path(repo).is_dir():
             continue
-        rs = inspect(repo)
+        started = info_of.get(owner[repo][0], {}).get("started_at") if repo in owner else None
+        rs = inspect(repo, since=started if isinstance(started, (int, float)) else None)
         if rs.error:
             plan.errors.append(rs)
             continue
@@ -286,9 +307,8 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
             if not rs.owed:
                 plan.clean += 1
                 plan.resolved.append(repo)
-                plan.resolved_ids |= {entry_id(s, repo) for s, rp in rec.items() if repo in rp}
             elif status_of[sid] == "DEAD":
-                plan.catch_up.append((sid, rs, "ENDED/stale"))
+                plan.catch_up.append((sid, rs, why_dead(info_of.get(sid) or {})))
             else:
                 plan.waiting.append((repo, sid))
         elif rs.owed:
@@ -299,7 +319,22 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
             plan.noted.append(rs)
         if rs.merged:
             plan.merged_repos.append(rs)
+        if rs.unshared:
+            plan.unshared_repos.append(rs)
     return plan
+
+
+def why_dead(info: Any) -> str:
+    """`ended 10-01 22:48` or `idle since 10-01 22:48`: what the entry says
+    about its session. Idle past the stale limit is not ended; the session may
+    come back, and the entry must not claim otherwise."""
+    ended = info.get("ended_at")
+    if isinstance(ended, (int, float)) and ended:
+        return f"ended {datetime.fromtimestamp(ended):%m-%d %H:%M}"
+    last = info.get("last_activity_at") or info.get("started_at")
+    if isinstance(last, (int, float)) and last:
+        return f"idle since {datetime.fromtimestamp(last):%m-%d %H:%M}"
+    return "idle"
 
 
 # ---------------------------------------------------------------- tracker writes
@@ -313,15 +348,29 @@ def _short(repo: str) -> str:
     return "~" + repo[len(home):] if repo.startswith(home + os.sep) else repo
 
 
-def render_entry(sid: str, rs: RepoState, stamp: str) -> str:
+def render_entry(sid: str, rs: RepoState, stamp: str, why: str = "idle", eid: str = "") -> str:
     where = _redact(_short(rs.repo))
-    head = f"**{stamp} [session {sid} #{entry_id(sid, rs.repo)}] — {HEADLINE_TAG} {where}: owed work.**"
-    body = ["Found by `inflight audit` after this session ended; not verified by a person.",
+    head = f"**{stamp} [session {sid} #{eid or entry_id(sid, rs.repo)}] — {HEADLINE_TAG} {where}: owed work.**"
+    body = [f"Found by `inflight audit` (session {why}); not verified by a person.",
             f"repo: {_redact(rs.repo)}"]
     body += [f"- [ ] {f}" for f in rs.findings]
+    if rs.unshared:
+        body.append("Older local branches, no upstream, last commit before this session started "
+                    "(listed, not owed): " + ", ".join(f"{b} ({n})" for b, n in rs.unshared))
     body.append("Next: verify on disk, then push / commit / drop. Taking it over: append `(took over "
                 f"{sid})` here.")
     return head + "\n" + "\n".join(body)
+
+
+_REPO_LINE = re.compile(r"^repo: (.+)$", re.M)
+
+
+def _repo_of(e: core.Entry) -> Optional[str]:
+    """Canonical repo of an entry audit wrote, from its `repo:` line."""
+    if HEADLINE_TAG not in e.head:
+        return None
+    m = _REPO_LINE.search(e.text)
+    return paths.canonical(m.group(1).strip()) if m else None
 
 
 def _findings_of(text: str) -> List[str]:
@@ -341,17 +390,22 @@ def apply(plan: Plan, path: Path, today: Optional[date] = None) -> Dict[str, int
         if rn is None:
             rn = core.Section(core.RIGHT_NOW)
             sections.insert(1 if sections and sections[0].header == "" else 0, rn)
-        by_id = {e.id: e for e in rn.entries if e.id}
         changed = False
-        for sid, rs, _st in plan.catch_up:
+        # audit's own entries, by (session, canonical repo): one repo spelled two
+        # ways (case, symlink) is one repo, and keeps its existing entry id
+        mine = [(e, _repo_of(e)) for e in rn.entries]
+        mine = [(e, r) for e, r in mine if r]
+        kept: set = set()
+        for sid, rs, why in plan.catch_up:
             if not state.valid_sid(sid) or any(c in rs.repo for c in "\r\n"):
                 continue
-            new = render_entry(sid, rs, stamp)
+            cur = next((e for e, r in mine if r == rs.repo and e.session == sid), None)
+            new = render_entry(sid, rs, stamp, why, eid=(cur.id or "") if cur else "")
             if safety.body_problems(new.split("\n", 1)[1]):
                 continue  # never write text that could forge an entry
-            cur = by_id.get(entry_id(sid, rs.repo))
             if cur is None:
-                rn.entries.insert(0, core.Entry(new))
+                cur = core.Entry(new)
+                rn.entries.insert(0, cur)
                 counts["added"] += 1
                 changed = True
             elif _findings_of(cur.text) == rs.findings and progress.lifecycle(cur.text).state != "done":
@@ -360,9 +414,12 @@ def apply(plan: Plan, path: Path, today: Optional[date] = None) -> Dict[str, int
                 cur.text = new  # same id, fresh findings, back to active
                 counts["updated"] += 1
                 changed = True
-        for e in rn.entries:
-            # only entries audit wrote: the id is derived from (session, repo)
-            if HEADLINE_TAG not in e.head or e.id not in plan.resolved_ids:
+            kept.add(id(cur))
+        live = {rs.repo for _, rs, _ in plan.catch_up}
+        resolved = set(plan.resolved)
+        for e, repo in mine:
+            # close: the repo is clean, or another entry now holds its owed work
+            if id(e) in kept or (repo not in resolved and repo not in live):
                 continue
             if progress.lifecycle(e.text).state != "done":
                 e.text = progress.set_status(e.text, "done", today)
@@ -406,7 +463,7 @@ def catch_up(budget_s: float = 3.0, min_interval_s: float = 600.0) -> Optional[D
         # A session only a plugin knows is UNKNOWN here, so it is never written.
         plan = build(use_roots=False, deadline=time.monotonic() + budget_s,
                      be=backends.chain(plugins=False) or False)
-        if not plan.catch_up and not plan.resolved_ids:  # nothing to write: skip the lock
+        if not plan.catch_up and not plan.resolved:  # nothing to write: skip the lock
             return {}
         return apply(plan, paths.inflight_file().expanduser())
     except Exception as e:  # catch-up must never break a hook or the cron
@@ -419,9 +476,9 @@ def catch_up(budget_s: float = 3.0, min_interval_s: float = 600.0) -> Optional[D
 def _print(plan: Plan, apply_mode: bool) -> None:
     print(f"inflight audit ({'apply' if apply_mode else 'dry run: nothing written'})")
     print(f"\ncatch-up: {len(plan.catch_up)} (session ended or idle past the stale limit; "
-          "one entry per session+repo)")
-    for sid, rs, _ in plan.catch_up:
-        print(f"  [session {sid}] {_short(rs.repo)}")
+          "one entry per repo)")
+    for sid, rs, why in plan.catch_up:
+        print(f"  [session {sid}, {why}] {_short(rs.repo)}")
         for f in rs.findings:
             print(f"      - {f}")
     if plan.waiting:
@@ -444,6 +501,12 @@ def _print(plan: Plan, apply_mode: bool) -> None:
             print(f"  {_short(rs.repo)}:")
             for b, c, d in rs.merged:
                 print(f"      {b} ({c} commit(s), already on {d})")
+    if plan.unshared_repos:
+        total = sum(len(rs.unshared) for rs in plan.unshared_repos)
+        print(f"\nolder local branches (no upstream, last commit before the owning session started; "
+              f"not owed work): {total} branch(es)")
+        for rs in plan.unshared_repos:
+            print(f"  {_short(rs.repo)}: " + ", ".join(f"{b} ({n})" for b, n in rs.unshared))
     if plan.noted:
         print(f"\nnotes (not owed work): {len(plan.noted)}")
         for rs in plan.noted:

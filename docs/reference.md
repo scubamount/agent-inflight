@@ -198,6 +198,7 @@ the Hermes cron job use.
 |---|---|
 | Uncommitted | `git status` shows changes. Submodules are skipped; they are audited as their own repos. |
 | Unpushed | Commits on no remote-tracking ref (`rev-list <branch> --not --remotes`). A branch with no upstream is flagged `(no upstream)`. |
+| Older local branch | A branch with no upstream whose last commit is older than the owning session's start. The session didn't make it, so it is listed in its own section (and on one line in the entry) and is not owed. |
 | Stash | Any stash entry. |
 | Already on the default branch | Every unpushed commit has a patch-id twin on the remote default branch, for example after a rebase or cherry-pick. This is listed in its own section and is not owed. A squash of several commits has no twin, so it stays unpushed. A failed or timed-out check keeps the branch unpushed. |
 | Note | A branch that is ahead of a stale upstream ref, with its commits already on another remote. This is a note, not owed work. |
@@ -205,9 +206,13 @@ the Hermes cron job use.
 **Who owns it.**
 
 - A repo whose last recording session is ENDED, or idle past `--stale-min`
-  (default 120 minutes, env `INFLIGHT_STALE_MIN`), gets one entry per
-  (session, repo). The entry is tagged with that session, with the head
-  `audit: <repo>: owed work`. Re-runs update it in place.
+  (default 120 minutes, env `INFLIGHT_STALE_MIN`), gets one entry. The entry
+  is tagged with that session, with the head `audit: <repo>: owed work`, and
+  says whether the session ended or since when it has been idle. Re-runs
+  update it in place. When a newer session becomes the last recorder, its
+  entry replaces the older one, which is marked done.
+- Repos are compared by their canonical path: symlinks resolved and, on
+  macOS, the on-disk case, so `~/Code/x` and `~/code/x` are one repo.
 - When the repo is clean again, the entry is marked done, never deleted.
 - Repos that an ACTIVE session recorded are skipped.
 - Scan-root repos that no session recorded are listed as **unowned** and never
