@@ -215,10 +215,20 @@ class Walkthrough(unittest.TestCase):
 class DocPointers(unittest.TestCase):
     def test_linked(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("docs/extending.md", readme)
+        for doc in ("docs/extending.md", "docs/reference.md", "docs/hook-protocol.md", "docs/why.md"):
+            self.assertIn(doc, readme)
         self.assertIn("extending.md", (ROOT / "docs" / "hook-protocol.md").read_text(encoding="utf-8"))
-        for rel in re.findall(r"\]\(([^)#]+)\)", DOC.read_text(encoding="utf-8")):
-            self.assertTrue((DOC.parent / rel).exists(), f"broken link in extending.md: {rel}")
+
+    def test_relative_links_resolve(self):
+        """Every relative link in every tracked Markdown file points at a file that exists."""
+        docs = [p for p in ROOT.rglob("*.md")
+                if not any(part.startswith(".") or part in ("build", "__pycache__") for part in p.relative_to(ROOT).parts)]
+        self.assertGreater(len(docs), 10)
+        for md in docs:
+            for rel in re.findall(r"\]\(([^)#\s]+)(?:#[^)]*)?\)", md.read_text(encoding="utf-8")):
+                if re.match(r"[a-z]+:", rel):
+                    continue
+                self.assertTrue((md.parent / rel).exists(), f"broken link in {md.relative_to(ROOT)}: {rel}")
 
 
 if __name__ == "__main__":

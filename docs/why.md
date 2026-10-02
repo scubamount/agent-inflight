@@ -1,5 +1,8 @@
 # Why agent-inflight exists
 
+The design rationale. For setup, see the [README](../README.md); for exact
+behavior, see [reference.md](reference.md).
+
 ## The problem
 
 An AI coding agent has no memory between sessions. Whatever it did is in git

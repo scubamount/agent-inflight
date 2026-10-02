@@ -34,7 +34,7 @@ two lines to `<hermes-home>/SOUL.md` (or the profile's SOUL.md):
 
 ```markdown
 - **Session start** (repo/infra work): read `inflight.md` § Right now; run `inflight sessions`. ACTIVE sibling on the same files = coordinate, don't mutate.
-- **Session close:** `inflight add "<thing>: <state>" "<not done; next step>"` for anything not landed; delete resolved entries.
+- **Session close:** `inflight add "<thing>: <state>" "<not done; next step>"` for anything not landed; `inflight done <id>` for resolved ones.
 ```
 
 ## Keep it trimmed

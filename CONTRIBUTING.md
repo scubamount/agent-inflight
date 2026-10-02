@@ -3,6 +3,9 @@
 Thanks for helping. agent-inflight is small on purpose; changes that keep it
 small, stdlib-only and offline are the easiest to accept.
 
+Coding agents: read [AGENTS.md](AGENTS.md) as well. It has the same rules in
+a checklist form.
+
 ## Ground rules
 
 - **Stdlib only, Python 3.9+.** No runtime dependencies, no network calls,
@@ -31,7 +34,8 @@ command in that file.
 ## Pull requests
 
 - One change per PR, with a test that fails without it.
-- Update the README, `docs/` and the skill when behavior changes, in the same PR.
+- Update the README, `docs/reference.md`, the other `docs/` and the skill when
+  behavior changes, in the same PR.
 - Bump `VERSION`, `src/agent_inflight/__init__.py` and the skill's `version:`
   together.
 - Security issues: see [SECURITY.md](SECURITY.md), not a public PR.

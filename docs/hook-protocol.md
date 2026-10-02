@@ -28,12 +28,12 @@ inflight hook <event>   < one JSON object on stdin
 |---|---|---|---|
 | `session-start` | `session_id, cwd, source` (`new`, `startup`, `resume`, `compact` or `clear`), optional `harness` | Records the session and clears any ended flag. Does **not** record `cwd`'s repo: opening a session in a repo is not touching it, and recording it would make the new session the repo's latest recorder and take over the owed work a dead session left there. Tools and `cwd-changed` record repos. On `new`/`startup`: runs the audit catch-up (recorded repos of ENDED sessions only, built-in backends only, about 3 s budget, at most every 10 min unless a session ended since the last run; writes `## Right now` entries tagged with the dead session). | On `resume`/`compact`: the session's own open entries, as the same "verify on disk" block the Hermes plugin injects |
 | `pre-tool` | `session_id, cwd, tool, call_id` | Heartbeat | A collision warning, once per (session, repo), when another session with a heartbeat in the last 15 min touched the same repo |
-
-The Hermes plugin gives Hermes sessions the same warning (same text, same once-per-(session, repo) rule). Hermes discards `pre_tool_call` return values, so the plugin appends the warning to the tool result in `transform_tool_result`: the call has already run, and the model reads the warning before it continues.
 | `post-tool` | `session_id, cwd, tool, call_id` | Heartbeat. Records `cwd`'s repo as touched | none |
 | `cwd-changed` | `session_id, cwd` | Heartbeat. Records the repo | none |
 | `session-end` | `session_id, cwd, reason` | Sets `ended_at` and `end_reason`. Nothing else: harnesses give this hook about 1.5 s and crashes skip it, so the owed-work audit runs later as catch-up | none |
 | `heartbeat` | `session_id` | Heartbeat | none |
+
+The Hermes plugin gives Hermes sessions the same warning (same text, same once-per-(session, repo) rule). Hermes discards `pre_tool_call` return values, so the plugin appends the warning to the tool result in `transform_tool_result`: the call has already run, and the model reads the warning before it continues.
 
 A "repo" is the nearest ancestor of `cwd` containing `.git`. It is found by checking the filesystem only, with no git process, so a hostile repo config can't run anything here.
 

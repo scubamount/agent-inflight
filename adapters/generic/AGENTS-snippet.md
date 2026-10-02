@@ -20,8 +20,8 @@ A shared file lists what is open across all my agent sessions. Run
   exists before planning on it.
 - **End of task with anything not landed** (unpushed, unrestarted, unverified,
   waiting on me): `inflight add "<thing>: <state>" "<what's not done; next step>"`.
-  Resolved work: delete its entry. Taking over an entry: edit it and append
-  `(took over <old-id>)`.
+  Resolved work: `inflight done <entry-id>` (the `#a1b2c3` in its tag).
+  Taking over an entry: edit it and append `(took over <old-id>)`.
 - Never put secrets, customer data, or HR data in an entry.
 - Don't recite the tracker to me; use it.
 ```

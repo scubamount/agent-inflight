@@ -20,7 +20,7 @@ Only the latest tagged release and `main` get security fixes.
 
 ## Scope
 
-In scope, because the tool promises them (see "Guarantees" in the README):
+In scope, because the tool promises them (see [Guarantees](docs/reference.md#guarantees)):
 
 - Code execution from an audited repository (`safe_git()` bypass: hooks,
   fsmonitor, filter drivers, `include.path`, submodules).
