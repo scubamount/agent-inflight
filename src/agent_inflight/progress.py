@@ -7,6 +7,7 @@ Format (additive: entries without these lines parse as before):
     - [ ] C2 re-injection
     - [~] push (blocked: waiting on review)
     status: paused (stale since 2026-10-03)
+    waiting on: the owner's pick between A and C
 
 - Checkbox lines (`- [ ]` open, `- [x]` done, `- [~]` blocked) are counted
   only in the entry BODY, never the head, and never inside a ``` / ~~~ fence.
@@ -14,6 +15,10 @@ Format (additive: entries without these lines parse as before):
 - `status:` is the one optional lifecycle line: `active` (also when absent),
   `paused (stale since D)` or `done D`. Same fence rule. The CLI writes it;
   ticking every box does NOT close an entry (closing is an explicit act).
+- `waiting on:` is optional and says who or what the entry is blocked on (a
+  person, a vendor, CI). It is shown in the brief's headline so every session
+  sees it. Nothing polls it: whoever unblocks the work clears it.
+  `inflight wait` writes it; the last unfenced one wins.
 """
 from __future__ import annotations
 
@@ -24,6 +29,7 @@ from typing import Iterator, List, Optional, Tuple
 
 BOX_RE = re.compile(r"^\s*[-*]\s+\[( |x|X|~)\]\s+(.*)$")
 STATUS_RE = re.compile(r"^\s*status:\s*(active|paused|done)\b(.*)$", re.I)
+WAITING_RE = re.compile(r"^\s*waiting on:\s*(.*?)\s*$", re.I)
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _DATE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
 
@@ -107,6 +113,27 @@ def set_status(entry_text: str, state: str, when: date) -> str:
     return "\n".join(lines)
 
 
+def waiting(entry_text: str) -> str:
+    """What the entry waits on, or "" (last unfenced `waiting on:` line wins)."""
+    found = ""
+    for _, line in body_lines(entry_text):
+        m = WAITING_RE.match(line)
+        if m:
+            found = m.group(1)
+    return found
+
+
+def set_waiting(entry_text: str, on: str) -> str:
+    """Drop every unfenced `waiting on:` line, then append one (none when `on` is empty)."""
+    drop = {i for i, line in body_lines(entry_text) if WAITING_RE.match(line)}
+    lines = [ln for i, ln in enumerate(entry_text.split("\n")) if i not in drop]
+    while len(lines) > 1 and not lines[-1].strip():
+        lines.pop()
+    if on.strip():
+        lines.append(f"waiting on: {' '.join(on.split())}")
+    return "\n".join(lines)
+
+
 def last_touched(head_date: Optional[date], session_last_activity: Optional[float]) -> Optional[date]:
     """Staleness clock: newest of the entry's date and its owner's last activity,
     so a session still at work keeps its entry fresh without editing it."""
@@ -133,4 +160,7 @@ def summary(entry_text: str) -> str:
     lc = lifecycle(entry_text)
     if lc.state != "active":
         parts.append(lc.state)
+    w = waiting(entry_text)
+    if w and lc.state != "done":
+        parts.append(f"waiting on {w}")
     return " · ".join(parts)

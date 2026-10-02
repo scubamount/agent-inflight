@@ -129,6 +129,8 @@ When it finds Hermes, it also adds the Hermes skill and plugin. Flags:
 | `inflight brief` | Print the brief a session gets at start |
 | `inflight sessions` | Show each entry's owner, status (ACTIVE, IDLE, ENDED) and progress |
 | `inflight done <id>` | Mark an entry done (`--reopen` makes it active again) |
+| `inflight wait <id> "<who>"` | Say what an entry is waiting on; the brief shows it (`--clear` removes it) |
+| `inflight show <id>`, `inflight log [query]` | Read any entry, open or archived; list and search the history |
 | `inflight trim [--apply]` | Pause stale entries; archive done and over-budget ones (dry run by default) |
 | `inflight check` | Lint the file: shape, budgets, untagged entries, credential-like text, permissions |
 | `inflight audit [--apply]` | Find owed git work (uncommitted, unpushed, stashed) for each session |

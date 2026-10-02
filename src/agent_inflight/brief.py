@@ -7,7 +7,8 @@ own entries and only needs to know that the others exist. So the brief is:
 
   1. this session's own open entries in full: entries tagged with any
      session id in its compression lineage (never a delegation parent's);
-  2. one line per other open entry: entry id, owner status, date, owner, head.
+  2. one line per other open entry: entry id, owner status, date, owner, head,
+     and what it is waiting on when its `waiting on:` line is set.
 
 Done entries are left out. The brief is capped at BRIEF_MAX_BYTES. The full
 file stays on disk; `inflight path` names it for when an entry's detail
@@ -30,6 +31,7 @@ BRIEF_MAX_BYTES = 6_000
 HEADLINES_MAX_BYTES = 5_000  # all open entries' headlines; `trim` and `check` hold the file to this
 HEADLINES_RESERVE = 3_000    # room kept for other sessions' headlines when own entries are long
 HEAD_CHARS = 100
+WAIT_CHARS = 40
 _HEAD_RE = re.compile(r"^\*\*\s*(20\d{2})-(\d{2}-\d{2})(?: \d{2}:\d{2})?\s*(?:\[[^\]]*\])?\s*(?:—\s*)?(.*)$")
 
 
@@ -59,7 +61,10 @@ def headline(e: core.Entry, status: Optional[str]) -> str:
     if progress.lifecycle(e.text).state == "paused":
         st += " paused"
     eid = f"#{e.id} " if e.id else ""
-    return f"- {eid}{st} {day} {owner}: {rest}"
+    w = progress.waiting(e.text)
+    if len(w) > WAIT_CHARS:
+        w = w[:WAIT_CHARS - 3].rstrip() + "..."
+    return f"- {eid}{st} {day} {owner}: {rest}" + (f" (waiting on {w})" if w else "")
 
 
 def headlines_bytes(entries: List[core.Entry]) -> int:

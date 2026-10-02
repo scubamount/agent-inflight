@@ -22,6 +22,8 @@ A shared file lists what is open across all my agent sessions. Run
 - **End of task with anything not landed** (unpushed, unrestarted, unverified,
   waiting on me): `inflight add "<thing>: <state>" "<what's not done; next step>"`.
   Resolved work: `inflight done <entry-id>` (the `#a1b2c3` in its tag).
+  Waiting on someone: `inflight wait <entry-id> "<who>"`. Past work:
+  `inflight log <words>`, `inflight show <entry-id>`.
   Taking over an entry: edit it and append `(took over <old-id>)`.
 - Never put secrets, customer data, or HR data in an entry.
 - Don't recite the tracker to me; use it.

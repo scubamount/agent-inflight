@@ -2,7 +2,32 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 1.1.0
+## 1.2.0
+
+Read the history back, and say what an entry is waiting on.
+
+`trim` never deletes, but nothing read the archive: `inflight done` on an
+archived id answered "no entry matches", as if the entry never existed. On
+the author's machine the archive held 25 files and 88 entries that no command
+could reach.
+
+### Added
+
+- `inflight show <id|words>` prints one entry in full, open or archived, and
+  names the file it is in. The newest copy wins when an entry was archived
+  more than once.
+- `inflight log [query] [-n N]` lists the tracker and the archive as one
+  history, newest first, and searches it.
+- `inflight wait <id> "<who or what>"` writes an optional `waiting on:` line.
+  Every session's brief shows it after the headline; `--clear` removes it.
+  It is a note, not a gate: nothing polls it.
+
+### Changed
+
+- `done` and `wait` on an entry that has been archived say which archive
+  file holds it.
+- `add` never gives a new entry an id that an archived entry already has.
+
 
 Sessions get a brief instead of the whole tracker.
 

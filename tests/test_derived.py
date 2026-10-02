@@ -317,5 +317,99 @@ class Brief(unittest.TestCase):
         self.assertIn("over the brief's budget", out)
 
 
+class History(unittest.TestCase):
+    """`show` / `log` read the tracker and the archive as one history; `done`
+    names where an archived entry went; `add` never reuses an archived id."""
+
+    def setUp(self):
+        self._t = tempfile.TemporaryDirectory()
+        self.home = Path(self._t.name)
+        self.f = self.home / "inflight.md"
+        self.f.write_text("## Right now\n\n**2026-10-02 09:00 [session ME #cccccc] — open thing.** body c\n")
+        self.f.chmod(0o600)
+        a = self.home / "inflight-archive"
+        a.mkdir()
+        (a / "inflight-20260901_000000.md").write_text(
+            "# Archived\n\n**2026-09-01 10:00 [session OLD #aaaaaa] — old thing v1.** first copy\n"
+            "status: done 2026-09-01\n\n**2026-09-01 11:00 [session $HERMES_SESSION_ID] — untagged thing.** x\n")
+        (a / "inflight-20260902_000000.md").write_text(
+            "# Archived\n\n**2026-09-01 10:00 [session OLD #aaaaaa] — old thing v2.** newer copy\n"
+            "status: done 2026-09-02\n\n**2026-09-01 11:00 [session OLD] — untagged thing.** x retagged\n")
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_show_archived_newest_copy(self):
+        rc, out = run(self.home, "show", "aaaaaa")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("[inflight-20260902_000000.md]", out)
+        self.assertIn("newer copy", out)
+        self.assertNotIn("first copy", out)
+
+    def test_show_open_and_missing_and_ambiguous(self):
+        rc, out = run(self.home, "show", "#cccccc")
+        self.assertEqual((rc, out.splitlines()[0]), (0, "[tracker]"))
+        self.assertEqual(run(self.home, "show", "nonesuch")[0], 1)
+        rc, out = run(self.home, "show", "thing")
+        self.assertEqual(rc, 2, out)
+
+    def test_log_dedupes_retagged_copies_count(self):
+        rc, out = run(self.home, "log", "-n", "0")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("3 of 3 entries", out)  # aaaaaa once, untagged thing once (retag), cccccc
+        self.assertIn("x retagged", run(self.home, "show", "untagged thing")[1])
+        rc, out = run(self.home, "log", "newer copy")
+        self.assertIn("1 of 3 entries", out)
+        self.assertEqual(run(self.home, "log", "nonesuch")[0], 1)
+
+    def test_done_names_archive(self):
+        rc, out = run(self.home, "done", "aaaaaa")
+        self.assertEqual(rc, 1)
+        self.assertIn("archived in inflight-20260902_000000.md", out)
+
+    def test_add_never_reuses_archived_id(self):
+        from agent_inflight import history
+        self.assertEqual(history.ids(self.f), {"aaaaaa"})  # `add` unions these into `taken`
+
+
+class Waiting(unittest.TestCase):
+    def setUp(self):
+        self._t = tempfile.TemporaryDirectory()
+        self.home = Path(self._t.name)
+        self.f = self.home / "inflight.md"
+        self.f.write_text("## Right now\n\n**2026-10-02 09:00 [session OTHER #bbbbbb] — vendor thing.** body\n"
+                          "```\nwaiting on: fenced, ignored\n```\n")
+        self.f.chmod(0o600)
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_pure_roundtrip(self):
+        t = "**2026-10-02 [session S] — x.** b\n```\nwaiting on: no\n```"
+        self.assertEqual(pg.waiting(t), "")
+        w = pg.set_waiting(t, "  vendor   support ")
+        self.assertEqual(pg.waiting(w), "vendor support")
+        self.assertEqual(pg.set_waiting(pg.set_waiting(w, "CI"), "CI").count("waiting on: CI"), 1)
+        self.assertEqual(pg.set_waiting(w, ""), t)
+        self.assertIn("waiting on vendor support", pg.summary(w))
+        self.assertNotIn("waiting", pg.summary(pg.set_status(w, "done", date(2026, 10, 2))))
+
+    def test_cli_wait_shows_in_brief_then_clear(self):
+        rc, out = run(self.home, "wait", "bbbbbb", "vendor support")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("waiting on: vendor support", self.f.read_text())
+        rc, out = run(self.home, "brief", sid="ME")
+        self.assertIn("vendor thing. (waiting on vendor support)", out)
+        rc, out = run(self.home, "wait", "bbbbbb", "--clear")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("waiting on: vendor", self.f.read_text())
+        self.assertIn("waiting on: fenced, ignored", self.f.read_text())
+
+    def test_cli_wait_refuses(self):
+        self.assertEqual(run(self.home, "wait", "bbbbbb")[0], 2)  # argparse: nothing to say
+        self.assertEqual(run(self.home, "wait", "bbbbbb", "x\n## Right now")[0], 4)
+        self.assertEqual(run(self.home, "wait", "nonesuch", "CI")[0], 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

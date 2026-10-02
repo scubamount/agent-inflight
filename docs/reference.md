@@ -81,6 +81,32 @@ it after `INFLIGHT_DONE_GRACE_DAYS`.
   matches exactly one entry: a session id, a date, or words from the headline.
 - `--reopen` removes the status line, so the entry is active again.
 - `--dry-run` prints the change and writes nothing.
+- An entry that is no longer in `## Right now` exits 1 and names the archive
+  file it was moved to.
+
+### `inflight wait <match> "<who or what>" | --clear [--dry-run]`
+
+Records who or what one entry is waiting on, as a `waiting on: <text>` line
+(one per entry; a new one replaces the old). Every session's brief shows it
+after the headline: `(waiting on vendor support)`. Nothing polls it or clears
+it automatically; whoever unblocks the work runs `--clear`. `<match>` works as
+for `done`. Text that could forge an entry exits 4; credential-like text
+exits 5.
+
+### `inflight show <match>`
+
+Prints one entry in full, from the tracker or the archive, after a line
+naming the file it is in (`[tracker]` or `[inflight-<stamp>.md]`).
+`<match>` is an entry id, or words from the entry's head or body. When an
+entry appears in several files, the newest copy is shown. Exit 1 when nothing
+matches, 2 when several entries match (they are listed).
+
+### `inflight log [query] [-n N]`
+
+Lists entries from the tracker and the archive, newest first, one line each:
+id, file, state (`active`, `paused`, `done`, `archived`), head. With a query,
+only entries whose id it is or whose text contains it (case-insensitive).
+`-n` caps the lines (default 30; `0` for all). Exit 1 when nothing matches.
 
 ### `inflight sessions [--json] [--children] [--active-min N]`
 
@@ -229,11 +255,11 @@ Nothing is imported until a plugin is enabled. Every change is logged to
 | Code | Meaning | Commands |
 |---|---|---|
 | 0 | Success, or nothing to do. | all |
-| 1 | `check` found problems; `done` matched no entry; `plugin enable` named a plugin that isn't installed. | `check`, `done`, `plugin` |
-| 2 | `done` matched more than one entry (the candidates are listed); the tracker is missing; the settings file is unreadable or in a non-standard layout; the command is unknown. | `done`, `sessions`, `adapter`, `inflight` |
-| 3 | Another writer held the lock or changed the file; re-run. For `adapter install`, a managed setting blocks user hooks. | `add`, `done`, `trim`, `audit`, `adapter` |
-| 4 | `add` refused text that would forge or corrupt an entry. | `add` |
-| 5 | `add` refused text that looks like a credential. | `add` |
+| 1 | `check` found problems; `done`, `wait`, `show` or `log` matched no entry; `plugin enable` named a plugin that isn't installed. | `check`, `done`, `wait`, `show`, `log`, `plugin` |
+| 2 | `done`, `wait` or `show` matched more than one entry (the candidates are listed); the tracker is missing; the settings file is unreadable or in a non-standard layout; the command is unknown. | `done`, `sessions`, `adapter`, `inflight` |
+| 3 | Another writer held the lock or changed the file; re-run. For `adapter install`, a managed setting blocks user hooks. | `add`, `done`, `wait`, `trim`, `audit`, `adapter` |
+| 4 | `add` or `wait` refused text that would forge or corrupt an entry. | `add`, `wait` |
+| 5 | `add` or `wait` refused text that looks like a credential. | `add`, `wait` |
 
 `inflight hook` always exits 0.
 
@@ -242,6 +268,7 @@ Nothing is imported until a plugin is enabled. Every change is logged to
 ```markdown
 **2026-09-30 19:10 [session S #a1b2c3] — rollout: step 2 of 3.** What is not done, the next step, the handle.
 status: paused (stale since 2026-10-03)
+waiting on: the owner's pick between A and C
 - [x] step one
 - [ ] step two
 - [~] push (blocked: waiting on review)
@@ -255,6 +282,9 @@ status: paused (stale since 2026-10-03)
 - **Status line.** Optional: `status: done <date>` or
   `status: paused (stale since <date>)`. No status line means the entry is
   active. `done` and `trim` write this line.
+- **Waiting line.** Optional: `waiting on: <who or what>`, written by
+  `inflight wait`. The brief shows it after the headline. It is a note for
+  other sessions, not a gate: nothing polls it.
 - **Progress.** Checkbox lines are counted on every read and never stored:
   `- [ ]` is open, `- [x]` is done, `- [~]` is blocked. The example shows as
   `progress 1/3 (1 blocked)` in `sessions`. Head lines and fenced code blocks
@@ -317,7 +347,7 @@ sessions.
 |---|---|---|
 | `inflight.md` | 0600 | The tracker |
 | `inflight.md.lock` | 0600 | `flock` target for every CLI writer |
-| `inflight-archive/` | 0700 | Trimmed text, `inflight-<stamp>.md`, plus `hooks.log` |
+| `inflight-archive/` | 0700 | Trimmed text, `inflight-<stamp>.md`, plus `hooks.log`. `show` and `log` read it; `add` never reuses an id found there. |
 | `inflight-archive/hooks.log` | 0600 | One JSON line per hook action, plugin change or `--force`. Only whitelisted keys are written. |
 | `inflight-state/` | 0700 | Everything below |
 | `inflight-state/venv/` | | Private stdlib venv |

@@ -16,6 +16,10 @@ USAGE = f"""inflight {__version__} — shared work tracker for agent sessions
   inflight me                   print this session's tag
   inflight done <match> [--reopen] [--dry-run]
                                 mark an entry done (trim archives it after a day)
+  inflight wait <match> "<who or what>" | --clear
+                                say what an entry is waiting on (shown in the brief)
+  inflight show <match>         one entry in full, open or archived
+  inflight log [query] [-n N]   list entries, open and archived, newest first
   inflight trim [--apply]       pause stale entries; archive done + over-budget ones
   inflight check                lint (exit 1 on findings)
   inflight path                 print the resolved file path
@@ -49,11 +53,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if cmd == "brief":
         from . import brief
         return brief.main(argv)
+    if cmd in ("show", "log"):
+        from . import history
+        return (history.show_main if cmd == "show" else history.log_main)(argv)
     from . import entries, sessions, trim
     table = {
         "init": entries.init_main,
         "add": entries.add_main,
         "done": entries.done_main,
+        "wait": entries.wait_main,
         "check": entries.check_main,
         "trim": trim.main,
         "sessions": sessions.main,

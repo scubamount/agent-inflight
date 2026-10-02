@@ -5,7 +5,7 @@ import argparse
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from . import brief, core, paths, progress, safety, trim
 
@@ -69,6 +69,9 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     sid = args.session if args.session is not None else paths.session_id()
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
+    from . import history
+    archived_ids = history.ids(path)
+
     # Prepending doesn't depend on what's below, so a write that races us
     # (an editor that ignores the lock) is retried, not refused.
     try:
@@ -76,7 +79,7 @@ def add_main(argv: Optional[List[str]] = None) -> int:
             for _attempt in range(3):
                 before = path.stat()
                 sections = core.parse(path.read_text(encoding="utf-8"))
-                taken = {e.id for s in sections for e in s.entries if e.id}
+                taken = {e.id for s in sections for e in s.entries if e.id} | archived_ids
                 eid = core.new_id(f"{stamp}|{sid}|{headline}|{body}", taken)
                 tag = f" [session {sid} #{eid}]" if sid else f" [#{eid}]"
                 entry = core.Entry(f"**{stamp}{tag} — {headline}**" + (f" {body.strip()}" if body.strip() else ""))
@@ -128,42 +131,78 @@ def done_main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--file", type=Path, default=None)
     ap.add_argument("--today", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
-    path = (args.file or paths.inflight_file()).expanduser()
+    today = date.fromisoformat(args.today) if args.today else date.today()
+    state = "active" if args.reopen else "done"
+    return edit_one(args.file, args.match, args.dry_run, f"mark {state}", f"marked {state}",
+                    lambda t: progress.set_status(t, state, today))
+
+
+def wait_main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="inflight wait",
+        description="Say who or what one `## Right now` entry is waiting on (a person, a vendor, CI). "
+                    "Every session's brief shows it. Nothing polls it; clear it with --clear. "
+                    "Exit 0 written, 1 no match, 2 ambiguous, 3 file changed.")
+    ap.add_argument("match", help="entry id (a1b2c3), or a substring of the head")
+    ap.add_argument("on", nargs="?", default="", help="who or what, e.g. \"a user decision\", \"vendor support\"")
+    ap.add_argument("--clear", action="store_true", help="remove the `waiting on:` line")
+    ap.add_argument("--dry-run", action="store_true", help="print the change, write nothing")
+    ap.add_argument("--file", type=Path, default=None)
+    args = ap.parse_args(argv)
+    on = "" if args.clear else " ".join(args.on.split())
+    if not on and not args.clear:
+        ap.error("say what it is waiting on, or pass --clear")
+    problems = safety.body_problems(on) + (["contains a newline"] if "\n" in args.on else [])
+    if problems:
+        print("REFUSED: " + "; ".join(problems), file=sys.stderr)
+        return 4
+    if safety.secret_kinds(on):
+        print("REFUSED: text looks like a credential; never put secrets in the tracker", file=sys.stderr)
+        return 5
+    return edit_one(args.file, args.match, args.dry_run, "clear waiting on" if args.clear else f"set waiting on {on!r}",
+                    "cleared waiting on" if args.clear else f"waiting on {on!r}",
+                    lambda t: progress.set_waiting(t, on))
+
+
+def edit_one(file: Optional[Path], needle: str, dry_run: bool, verb: str, past: str,
+             change: "Callable[[str], str]") -> int:
+    """Apply `change` to the one `## Right now` entry `needle` matches, under the lock."""
+    path = (file or paths.inflight_file()).expanduser()
     if not path.is_file():
         print(f"{path} not found (run `inflight init`)", file=sys.stderr)
         return 1
     try:
         with safety.locked(path):
-            return _done_locked(path, args)
+            return _edit_locked(path, needle, dry_run, verb, past, change)
     except safety.LockTimeout as e:
         print(f"REFUSED: {e}; re-run", file=sys.stderr)
         return 3
 
 
-def _done_locked(path: Path, args: argparse.Namespace) -> int:
+def _edit_locked(path: Path, needle: str, dry_run: bool, verb: str, past: str, change: "Callable[[str], str]") -> int:
     before = path.stat()
     sections = core.parse(path.read_text(encoding="utf-8"))
     rn = core.right_now(sections)
-    hits = match(rn.entries, args.match) if rn else []
+    hits = match(rn.entries, needle) if rn else []
     if rn is None or not hits:
-        print(f"no entry in `## Right now` matches {args.match!r}", file=sys.stderr)
+        from . import history
+        hint = history.archived_hint(path, needle)
+        print(f"no entry in `## Right now` matches {needle!r}" + (f"; {hint}" if hint else ""), file=sys.stderr)
         return 1
     if len(hits) > 1:
-        print(f"{len(hits)} entries match {args.match!r}; use the entry id or more words:", file=sys.stderr)
+        print(f"{len(hits)} entries match {needle!r}; use the entry id or more words:", file=sys.stderr)
         for i in hits:
             e = rn.entries[i]
             print(f"  #{e.id or '------'}  {' '.join(e.head.replace('**', '').split())[:100]}", file=sys.stderr)
         return 2
     e = rn.entries[hits[0]]
-    today = date.fromisoformat(args.today) if args.today else date.today()
-    state = "active" if args.reopen else "done"
-    new_text = progress.set_status(e.text, state, today)
+    new_text = change(e.text)
     label = " ".join(e.head.replace("**", "").split())[:100]
     if new_text == e.text:
-        print(f"unchanged (already {state}): {label}")
+        print(f"unchanged (already so): {label}")
         return 0
-    if args.dry_run:
-        print(f"would mark {state}: {label}")
+    if dry_run:
+        print(f"would {verb}: {label}")
         return 0
     e.text = new_text
     now = path.stat()
@@ -171,7 +210,7 @@ def _done_locked(path: Path, args: argparse.Namespace) -> int:
         print("REFUSED: file changed while writing; re-run", file=sys.stderr)
         return 3
     safety.write_private(path, core.render(sections))
-    print(f"marked {state}: {label}")
+    print(f"{past}: {label}")
     return 0
 
 

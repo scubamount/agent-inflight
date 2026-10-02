@@ -1,7 +1,7 @@
 ---
 name: inflight-tracker
 description: Shared cross-session work tracker; read at start, update at end.
-version: 1.1.0
+version: 1.2.0
 author: scubamount, Hermes Agent
 license: Apache-2.0
 platforms: [linux, macos]
@@ -42,6 +42,9 @@ inflight me                           # this session's tag
 inflight add "<thing>: <state>" "<not done; next step; who decides>"
 inflight check                        # lint; exit 1 on findings
 inflight done <id|words>              # mark finished; trim archives it after a day
+inflight wait <id> "<who or what>"    # waiting on a person/vendor/CI; shown in every brief; --clear
+inflight show <id|words>              # one entry in full, open or archived
+inflight log [query]                  # history, newest first, tracker + archive
 inflight trim                         # dry run; --apply pauses stale, archives done/over-budget
 ```
 
@@ -83,6 +86,10 @@ Don't recite the tracker back to the user. Use it.
    `(took over <old-id>)`. Don't add a duplicate.
 3. Resolved work: `inflight done <id>` (the `#a1b2c3` in its tag). Trim
    archives it after a day. Deleting the entry by hand also works.
+   Blocked on someone else (a user's decision, a vendor, CI): `inflight wait <id>
+   "<who>"` so every session's brief shows it; `--clear` when it unblocks.
+   Looking for past work, or an id `done` says is archived: `inflight log
+   <words>`, then `inflight show <id>`.
 4. Done when `inflight check` exits 0 or its only finding is the size budget.
 
 ### What a good entry says
