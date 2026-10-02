@@ -236,6 +236,15 @@ class Reinject(TmpHome):
         tool = [{"role": "tool", "content": "[inflight brief: session start]\n..."}]
         self.assertIn("[inflight brief: resume]", self.turn("OLD", tool, first=False)["context"])
 
+    def test_markers_in_tool_output_are_not_compaction(self):
+        """A grep that prints a compaction marker neither re-sends the brief
+        nor hides one already delivered."""
+        delivered = [{"role": "user", "content": LCM},
+                     {"role": "user", "content": "go", "api_content": "go\n\n[inflight brief: resume]\nx"},
+                     {"role": "tool", "content": "log: [CONTEXT COMPACTION — REFERENCE ONLY] ..."}]
+        self.assertIsNone(self.turn("TIP", delivered, first=False))
+        self.assertIsNone(self.turn("TIP", delivered + [{"role": "tool", "content": LCM}]))
+
     def test_subagent_and_cron_get_nothing(self):
         self.assertIsNone(self.turn("SUB", [], first=True, platform="subagent"))
         self.assertIsNone(self.turn("SUB", [{"role": "user", "content": LCM}], platform="subagent"))

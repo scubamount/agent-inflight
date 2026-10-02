@@ -42,10 +42,12 @@ def _texts(content: Any) -> Iterable[str]:
 
 
 def compaction_signature(history: Any) -> str:
-    """Hash of every compaction marker (with its first 120 chars) in the history."""
+    """Hash of every compaction marker (with its first 120 chars) in the
+    history. Tool results are skipped: a grep or log read that prints a marker
+    is not a compaction."""
     h = hashlib.sha1()
     for m in history or []:
-        if not isinstance(m, dict):
+        if not isinstance(m, dict) or m.get("role") == "tool":
             continue
         for text in _texts(m.get("content")):
             for hit in COMPACTION_RE.finditer(text):
@@ -55,13 +57,13 @@ def compaction_signature(history: Any) -> str:
 
 def has_brief(history: Any) -> bool:
     """True when a brief appears after the last compaction marker. Only user
-    turns count (a tool result that printed a brief, e.g. a test run, is not
-    a delivery). They carry it in `content` or, for Hermes' replayed turns, in
-    the `api_content` sidecar (the bytes actually sent). Compaction markers
-    count in any role."""
+    turns deliver a brief; they carry it in `content` or, for Hermes' replayed
+    turns, in the `api_content` sidecar (the bytes actually sent). Tool
+    results are skipped entirely: a test run or grep that prints a brief or a
+    marker is neither a delivery nor a compaction."""
     found = False
     for m in history or []:
-        if not isinstance(m, dict):
+        if not isinstance(m, dict) or m.get("role") == "tool":
             continue
         user = m.get("role") == "user"
         for key in ("content", "api_content"):

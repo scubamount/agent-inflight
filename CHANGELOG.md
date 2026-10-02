@@ -2,6 +2,15 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.2.2
+
+### Fixed
+
+- Compaction markers and briefs inside tool results no longer count. A grep
+  or log read that printed `[CONTEXT COMPACTION` (common in sessions that
+  debug Hermes itself) made the plugin think a compaction had happened after
+  the last brief, so 1.2.1 still re-sent the brief after a restart.
+
 ## 1.2.1
 
 Fixes found by watching a long-running Hermes session through a day of
