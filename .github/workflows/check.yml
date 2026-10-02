@@ -1,0 +1,67 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+        # (https://github.com/actions/runner-images/issues/14748). The pinned
+        # ubuntu-24.04 leg stays on the old image, so a break after the move
+        # shows up as "latest red, 24.04 green". Drop the pin once 26 is green.
+        os: [ubuntu-latest, ubuntu-24.04, macos-latest]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      # No ~/.hermes on the runner: proves the core works without Hermes.
+      - name: make check
+        run: make check PY=python
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      # Hash-locked: a changed or substituted wheel fails the install.
+      - name: install ruff + mypy
+        run: python -m pip install --require-hashes --no-deps -r requirements-lint.txt
+      - name: make lint
+        run: make lint PY=python
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # full history: scan every commit, not just the tip
+      # Release binary, not gitleaks-action (that one needs a license key for
+      # org repos). The sha256 is pinned: a swapped tarball fails the job.
+      - name: gitleaks (all history)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${f}"
+          echo "${GITLEAKS_SHA256}  ${f}" | sha256sum -c -
+          tar -xzf "$f" gitleaks
+          ./gitleaks git . --log-opts="--all" --redact --no-banner --exit-code 1

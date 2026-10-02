@@ -1,0 +1,5 @@
+# Lint/type-check tools for CI and `make lint`. Not runtime deps: agent-inflight is stdlib-only.
+# Regenerate the locked file after editing:
+#   uv pip compile requirements-lint.in --generate-hashes --universal --python-version 3.13 -o requirements-lint.txt
+ruff==0.16.10
+mypy==2.4.0

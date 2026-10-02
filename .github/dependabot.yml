@@ -1,0 +1,11 @@
+# GitHub Actions only: agent-inflight has no runtime dependencies.
+# Dependabot keeps the full-SHA pins and their version comments in sync.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

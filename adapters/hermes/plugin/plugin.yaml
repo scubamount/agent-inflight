@@ -1,0 +1,9 @@
+name: agent-inflight
+version: "0.3.0"
+description: "Runtime session tags and post-compaction recall for inflight.md. When a tool call hand-edits the tracker, entries it wrote with a literal `[session $VAR]` tag get the real session id the runtime knows, and new lint findings are appended to the tool result. After a context compaction (or on resume) the session gets its own entries back in the user turn, scoped to its compression lineage, 6 KB cap; INFLIGHT_REINJECT=0 disables. Observe-only before the call (never blocks); fails open."
+author: "scubamount"
+license: "Apache-2.0"
+provides_hooks:
+  - pre_tool_call
+  - transform_tool_result
+  - pre_llm_call

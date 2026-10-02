@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Launcher: runs the package from the checkout, no pip install needed."""
+import os
+import sys
+
+here = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(here), "src"))
+
+from agent_inflight.cli import main  # noqa: E402
+
+raise SystemExit(main())
