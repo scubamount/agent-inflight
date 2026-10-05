@@ -93,12 +93,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--active-min", type=int, default=state.ACTIVE_MIN)
     ap.add_argument("--file", type=Path, default=None)
-    ap.add_argument("--me", action="store_true", help="same as `inflight me`")
     ap.add_argument("--children", action="store_true",
                     help="list each entry's delegated child sessions (read from the backend, never stored)")
     args = ap.parse_args(argv)
-    if args.me:
-        return me_main()
 
     path = (args.file or paths.inflight_file()).expanduser()
     if not path.is_file():

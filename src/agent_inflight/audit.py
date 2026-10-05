@@ -74,13 +74,28 @@ def roots() -> List[Tuple[Path, int]]:
     return out
 
 
-def ignore_branches() -> List[str]:
-    """Opt-in glob patterns (config.json audit.ignore_branches); empty by default.
+def _globs(key: str) -> List[str]:
+    """Opt-in glob patterns (config.json audit.<key>); empty by default.
     `inflight check` lists them so nothing is hidden silently."""
     from . import plugins
     cfg = plugins._load_config().get("audit", {})
-    v = cfg.get("ignore_branches", []) if isinstance(cfg, dict) else []
+    v = cfg.get(key, []) if isinstance(cfg, dict) else []
     return [p for p in v if isinstance(p, str) and p] if isinstance(v, list) else []
+
+
+def ignore_branches() -> List[str]:
+    return _globs("ignore_branches")
+
+
+def ignore_repos() -> List[str]:
+    return _globs("ignore_repos")
+
+
+def repo_ignored(repo: str, patterns: List[str]) -> bool:
+    """`repo` (canonical) matches a glob; `~` expands. Case-insensitive on
+    macOS, where the filesystem is."""
+    fold = (lambda s: s.lower()) if sys.platform == "darwin" else (lambda s: s)
+    return any(fnmatch.fnmatchcase(fold(repo), fold(os.path.expanduser(p).rstrip("/"))) for p in patterns)
 
 
 def scan(root: Path, depth: int) -> Iterator[Path]:
@@ -395,6 +410,7 @@ class Plan:
     truncated: bool = False                                                  # hit the deadline
     noted: List[RepoState] = field(default_factory=list)                     # clean, with notes
     merged_repos: List[RepoState] = field(default_factory=list)              # any branch already on default
+    ignored: List[str] = field(default_factory=list)                         # repos matching audit.ignore_repos
 
     def as_dict(self) -> Dict[str, Any]:
         def facts(r: RepoState) -> Dict[str, Any]:
@@ -404,6 +420,7 @@ class Plan:
                 "in_use": [{"repo": r, "session": s} for r, s in self.in_use],
                 "waiting": [{"repo": r, "session": s} for r, s in self.waiting],
                 "pending": [{"repo": r, "session": s} for r, s in self.pending],
+                "ignored": self.ignored,
                 "unowned": [{**facts(r), "notes": r.notes,
                              "already_on_default": [{"branch": b, "commits": n, "default": d} for b, n, d in r.merged]}
                             for r in self.unowned],
@@ -445,10 +462,15 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
     candidates = list(dict.fromkeys(list(recorders) + ([paths.canonical(str(p)) for r, d in roots()
                                                          for p in scan(r, d)] if use_roots else [])))
     plan = Plan()
+    ignored = ignore_repos()
     for repo in candidates:
         if deadline is not None and time.monotonic() > deadline:
             plan.truncated = True
             break
+        if repo_ignored(repo, ignored):
+            plan.ignored.append(repo)
+            plan.owing[repo] = []  # owes nothing: open entries for it close
+            continue
         sids = recorders.get(repo, [])
         live = [s for s in sids if status_of[s] == "ACTIVE"]
         if live:
@@ -698,6 +720,10 @@ def _print(plan: Plan, apply_mode: bool) -> None:
         for rs in plan.noted:
             for n in rs.notes:
                 print(f"  {_short(rs.repo)}: {n}")
+    if plan.ignored:
+        print(f"\nignored (audit.ignore_repos, never inspected): {len(plan.ignored)}")
+        for repo in plan.ignored:
+            print(f"  {_short(repo)}")
     if plan.errors:
         print(f"\nskipped on error: {len(plan.errors)}")
         for rs in plan.errors:

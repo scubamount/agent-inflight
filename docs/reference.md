@@ -178,7 +178,7 @@ It also prints:
 
 - a `warn` line when it runs under a different Python than the private venv,
   because plugins installed in that venv are invisible from there;
-- a `note` line when `audit.ignore_branches` is set.
+- a `note` line when `audit.ignore_branches` or `audit.ignore_repos` is set.
 
 ### `inflight audit [--apply] [--catch-up] [--json] [--stale-min N]`
 
@@ -243,7 +243,11 @@ its own section, never written to the tracker.
 git call goes through `safe_git()` (see [Guarantees](#guarantees)).
 
 **Optional.** `audit.ignore_branches` takes a list of globs to hide matching
-branches. It is off by default; `inflight check` prints it when set.
+branches. `audit.ignore_repos` takes a list of path globs (`~` expands;
+case-insensitive on macOS) for repos that are dirty on purpose, such as a
+plugin checkout carrying live patches: they are never inspected, and open
+audit entries for them close. Both are off by default; `inflight check`
+prints them when set, and the audit lists the ignored repos.
 
 `--dry-run` is accepted and wins over `--apply`.
 
@@ -342,8 +346,8 @@ All settings are optional and read from the environment.
 | `INFLIGHT_REINJECT` | `1` | Hermes plugin: `0` turns off delivery of the brief |
 | `INFLIGHT_BIN_DIR` | `~/.local/bin` | `install.sh`: where to link the `inflight` command |
 
-Settings that live in `inflight-state/config.json`: `audit.roots` and
-`audit.ignore_branches` (see [`audit`](#inflight-audit---apply---catch-up---json---stale-min-n)).
+Settings that live in `inflight-state/config.json`: `audit.roots`,
+`audit.ignore_branches` and `audit.ignore_repos` (see [`audit`](#inflight-audit---apply---catch-up---json---stale-min-n)).
 
 ## Session status backends
 

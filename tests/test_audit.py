@@ -487,6 +487,29 @@ class Unpushed(World):
                            env={**os.environ}, timeout=60)
         self.assertIn("audit.ignore_branches hides branches matching: backup/*", p.stdout)
 
+    def test_ignore_repos_skips_and_closes_open_entry(self):
+        r = mkrepo(self.code / "patched", self.remote)
+        self.session("dead-1", [r], ended=True)
+        (r / "a.txt").write_text("live patch\n")
+        self.session("dead-1", [r], ended=True)
+        audit.apply(audit.build(), self.tracker)
+        self.assertIn("audit: ", self.tracker.read_text())
+        self.root_cfg([{"path": str(self.code)}])
+        cfg = json.loads((state.state_dir() / "config.json").read_text())
+        cfg["audit"]["ignore_repos"] = [str(self.code).upper() + "/PATCH*"]  # glob, case-folded on macOS
+        (state.state_dir() / "config.json").write_text(json.dumps(cfg))
+        if sys.platform != "darwin":
+            cfg["audit"]["ignore_repos"] = [str(self.code) + "/patch*"]
+            (state.state_dir() / "config.json").write_text(json.dumps(cfg))
+        plan = audit.build()
+        self.assertEqual((plan.ignored, plan.catch_up), ([paths.canonical(str(r))], []))
+        audit.apply(plan, self.tracker)
+        e = [x for x in core.right_now(core.parse(self.tracker.read_text())).entries if x.session == "dead-1"]
+        self.assertEqual([progress.lifecycle(x.text).state for x in e], ["done"])
+        p = subprocess.run([sys.executable, str(BIN), "check"], capture_output=True, text=True,
+                           env={**os.environ}, timeout=60)
+        self.assertIn("audit.ignore_repos hides repos matching: ", p.stdout)
+
     def test_dry_run_flag_is_accepted_and_wins(self):
         r = mkrepo(self.code / "p", self.remote)
         (r / "a.txt").write_text("d\n")

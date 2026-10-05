@@ -2,6 +2,19 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.4.0
+
+### Added
+
+- `audit.ignore_repos` in `config.json`: path globs for repos that are dirty
+  on purpose (a plugin checkout carrying live patches). They are never
+  inspected, open audit entries for them close, and `inflight check` and the
+  audit list them. `--json` gains `ignored`.
+
+### Removed
+
+- `inflight sessions --me`: use `inflight me`.
+
 ## 1.3.0
 
 ### Changed

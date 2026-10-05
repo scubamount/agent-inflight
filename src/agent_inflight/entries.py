@@ -292,9 +292,10 @@ def check_main(argv: Optional[List[str]] = None) -> int:
     if warn:
         print(f"warn  {warn}")
     from . import audit
-    ign = audit.ignore_branches()
-    if ign:
-        print(f"note  audit.ignore_branches hides branches matching: {', '.join(ign)}")
+    for key, what, ign in (("ignore_branches", "branches", audit.ignore_branches()),
+                           ("ignore_repos", "repos", audit.ignore_repos())):
+        if ign:
+            print(f"note  audit.{key} hides {what} matching: {', '.join(ign)}")
     print(summary)
     for f in findings:
         print(f"FAIL  {f}")
