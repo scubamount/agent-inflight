@@ -33,6 +33,8 @@ from . import paths, safety
 # every one of them already imports state (the hook path stays sqlite-free).
 ACTIVE_MIN = 15
 
+WRITES_MAX = 2000  # written-file records kept per session (newest win)
+
 SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")  # same charset as core.TAG_RE ids
 
 
@@ -64,8 +66,9 @@ def load(sid: str) -> Dict[str, Any]:
 
 def update(sid: str, **changes: Any) -> Dict[str, Any]:
     """Read-modify-write one session's state under its lock. `repo=` adds to
-    the touched-repo set; `warned=` adds to the warned-collision set; any other
-    key is set as-is."""
+    the touched-repo set; `writes=` (file paths) adds to the written-file set
+    that audit attributes dirty files by, keeping the newest WRITES_MAX;
+    `warned=` adds to the warned-collision set; any other key is set as-is."""
     p = session_path(sid)
     safety.ensure_private_dir(state_dir())
     safety.ensure_private_dir(p.parent)
@@ -79,6 +82,13 @@ def update(sid: str, **changes: Any) -> Dict[str, Any]:
         if repo:
             repos = data.setdefault("repos", {})
             repos[repo] = now
+        written = changes.pop("writes", None)
+        if written:
+            w = data.setdefault("writes", {})
+            for f in written:
+                w[f] = now
+            if len(w) > WRITES_MAX:
+                data["writes"] = dict(sorted(w.items(), key=lambda kv: kv[1])[-WRITES_MAX:])
         warned = changes.pop("warned", None)
         if warned:
             w = data.setdefault("warned", [])

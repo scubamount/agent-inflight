@@ -10,14 +10,22 @@ Two sources of repos, never mixed up:
 
 How each finding is used:
 
-  catch-up   a recorded repo with owed work whose LAST recording session is
-             ENDED, or IDLE longer than --stale-min (default 120). One entry
-             per repo, tagged with the DEAD session's id, written
+  attribution  each finding goes to the session that made it (attribute()):
+             a dirty file to the session that recorded writing it (Hermes
+             write tools), else to the one write-blind session (Claude Code)
+             whose active hours span its mtime; a commit or stash to the one
+             recorder whose active hours span its time. No single answer =
+             unattributed.
+  catch-up   a session's attributed work in a recorded repo, once that
+             session is ENDED or IDLE longer than --stale-min (default 120).
+             One entry per (session, repo), tagged with that session, written
              under `## Right now` with --apply. Re-running updates the same
-             entry in place; once the repo is clean the entry is marked done,
-             never deleted. Taking the work over stays explicit
+             entry in place; once the session owes nothing there the entry is
+             marked done, never deleted. Taking the work over stays explicit
              (`(took over <id>)`); audit never writes that.
   in use     a repo some ACTIVE session recorded: skipped, no entry.
+  unattributed  owed work in a recorded repo that no session provably made:
+             listed only, never written.
   unowned    a roots repo with owed work that no session recorded: listed
              only. It is never tagged to a session and never written.
 
@@ -106,16 +114,34 @@ def scan(root: Path, depth: int) -> Iterator[Path]:
 
 @dataclass
 class RepoState:
+    """Facts about one repo. `findings` describes them; attribution splits
+    them by session (see attribute())."""
     repo: str
-    findings: List[str] = field(default_factory=list)  # owed work
+    dirty: List[Tuple[str, str, Optional[float]]] = field(default_factory=list)  # (path, kind, mtime)
+    unpushed: List[Tuple[str, str, Optional[float], bool]] = field(default_factory=list)  # (branch, n, tip, upstream)
+    stashes: List[Optional[float]] = field(default_factory=list)                 # one commit time per entry
     notes: List[str] = field(default_factory=list)     # informational, never owed
     merged: List[Tuple[str, str, str]] = field(default_factory=list)  # (branch, count, default ref)
-    unshared: List[Tuple[str, str]] = field(default_factory=list)  # (branch, count): no upstream, older than the owner
     error: Optional[str] = None
 
     @property
+    def findings(self) -> List[str]:
+        out: List[str] = []
+        tracked = sum(1 for _, k, _ in self.dirty if k == "modified")
+        untracked = len(self.dirty) - tracked
+        if self.dirty:
+            parts = [f"{tracked} modified" if tracked else "", f"{untracked} untracked" if untracked else ""]
+            out.append("uncommitted: " + ", ".join(p for p in parts if p))
+        for name, count, _, upstream in self.unpushed:
+            out.append(f"{count} unpushed commit(s) on {name}" + ("" if upstream else " (no upstream)"))
+        if self.stashes:
+            k = len(self.stashes)
+            out.append(f"{k} stash entr{'y' if k == 1 else 'ies'}")
+        return out
+
+    @property
     def owed(self) -> bool:
-        return bool(self.findings)
+        return bool(self.dirty or self.unpushed or self.stashes)
 
 
 def _redact(text: str) -> str:
@@ -150,21 +176,59 @@ def _already_on(g: Any, default: Optional[str], branch: str) -> bool:
     return out == "0"
 
 
-def inspect(repo: str, timeout: float = 5.0, since: Optional[float] = None) -> RepoState:
-    """Owed work in one repo. `since` is the owning session's start: a branch
-    with no upstream whose newest commit is older than that was not made by
-    the session, so it goes to `unshared` (listed, not owed). Without `since`
-    every unpushed branch is owed."""
+def _status_paths(raw: str) -> List[Tuple[str, str]]:
+    """(repo-relative path, "modified" | "untracked") from `status --porcelain=v1 -z`.
+    A rename or copy is one entry; its source path (the next field) is skipped."""
+    out: List[Tuple[str, str]] = []
+    parts = raw.split("\0")
+    i = 0
+    while i < len(parts):
+        rec = parts[i]
+        i += 1
+        if len(rec) < 4:
+            continue
+        xy, path = rec[:2], rec[3:]
+        out.append((path, "untracked" if xy == "??" else "modified"))
+        if "R" in xy or "C" in xy:
+            i += 1
+    return out
+
+
+def _mtime(repo: str, rel: str) -> Optional[float]:
+    """Last change time of a dirty path. An untracked directory's own mtime
+    moves only when entries are added or removed, so it is the newest mtime
+    of anything inside (bounded walk)."""
+    p = os.path.join(repo, rel.rstrip("/"))
+    try:
+        newest = os.lstat(p).st_mtime
+    except OSError:
+        return None  # deleted: only a recorded write can attribute it
+    if rel.endswith("/"):
+        seen = 0
+        for root, dirs, files in os.walk(p):
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and d != ".git"]
+            for f in files:
+                seen += 1
+                if seen > 5000:
+                    return None  # too big to time: a partial newest could be too early
+                try:
+                    newest = max(newest, os.lstat(os.path.join(root, f)).st_mtime)
+                except OSError:
+                    pass
+    return newest
+
+
+def inspect(repo: str, timeout: float = 5.0) -> RepoState:
+    """Owed-work facts in one repo, each with the time attribute() needs:
+    dirty paths with their mtime, unpushed branches with their tip's commit
+    time, stash entries with theirs. Read-only git through safe_git, plus
+    lstat."""
     rs = RepoState(repo)
     try:
         neutral = neutralizers(Path(repo), timeout)
         g = lambda *a: safe_git(repo, *a, timeout=timeout, neutral=neutral)  # noqa: E731
-        dirty = [ln for ln in g("status", "--porcelain=v1", "--ignore-submodules=all").splitlines() if ln.strip()]
-        tracked = sum(1 for ln in dirty if not ln.startswith("??"))
-        untracked = len(dirty) - tracked
-        if tracked or untracked:
-            parts = [f"{tracked} modified" if tracked else "", f"{untracked} untracked" if untracked else ""]
-            rs.findings.append("uncommitted: " + ", ".join(p for p in parts if p))
+        for rel, kind in _status_paths(g("status", "--porcelain=v1", "-z", "--ignore-submodules=all")):
+            rs.dirty.append((rel, kind, _mtime(repo, rel)))
         has_remote = bool(g("for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes").strip())
         if has_remote:
             ignore = ignore_branches()
@@ -180,39 +244,126 @@ def inspect(repo: str, timeout: float = 5.0, since: Optional[float] = None) -> R
                 n = g("rev-list", "--count", f"refs/heads/{name}", "--not", "--remotes").strip()
                 if n and n != "0" and _already_on(g, default, name):
                     rs.merged.append((_redact(name), n, (default or "").replace("refs/remotes/", "")))
-                elif n and n != "0" and not upstream and since is not None and tip.isdigit() \
-                        and int(tip) < since:
-                    rs.unshared.append((_redact(name), n))
                 elif n and n != "0":
-                    rs.findings.append(f"{n} unpushed commit(s) on {_redact(name)}"
-                                       + ("" if upstream else " (no upstream)"))
+                    rs.unpushed.append((_redact(name), n, float(tip) if tip.isdigit() else None, bool(upstream)))
                 elif upstream and "ahead" in track:
                     ahead = track.split("ahead", 1)[1].split(",")[0].strip(" ]")
                     rs.notes.append(f"{_redact(name)}: {ahead} ahead of {upstream.replace('refs/remotes/', '')}, "
                                     "all on another remote (upstream ref stale; `git fetch` to refresh)")
         if g("for-each-ref", "--format=%(refname)", "refs/stash").strip():
-            n = g("rev-list", "--walk-reflogs", "--count", "refs/stash").strip()
-            rs.findings.append(f"{n} stash entr{'y' if n == '1' else 'ies'}")
+            out = g("rev-list", "--walk-reflogs", "--format=%ct", "refs/stash")
+            rs.stashes = [float(ln) for ln in out.splitlines() if ln.strip().isdigit()]
     except GitError as e:
         rs.error = str(e)
     return rs
 
 
+# ---------------------------------------------------------------- attribution
+
+SLACK_S = 120.0  # a write lands a moment after the heartbeat that preceded it
+
+
+@dataclass
+class Sess:
+    """What attribution knows about one session that recorded a repo."""
+    sid: str
+    start: Optional[float]
+    end: Optional[float]               # ended_at, else last activity
+    records_writes: bool               # its harness records the files it writes (Hermes)
+    writes: Dict[str, float] = field(default_factory=dict)  # canonical file path -> ts
+
+    def spans(self, t: Optional[float]) -> bool:
+        return t is not None and self.start is not None and self.end is not None \
+            and self.start <= t <= self.end + SLACK_S
+
+
+def _writer(path: str, mtime: Optional[float], sessions: List[Sess]) -> Optional[str]:
+    """Latest session that recorded writing `path` (a file, or a file under an
+    untracked directory `path/`), when that write explains the current
+    content: no write may be older than the file's last change by more than
+    SLACK_S. A stale write (last month's) proves nothing about today's edit,
+    and a path with no time (deleted, or a directory too big to walk) is
+    never given to a recorded writer."""
+    best: Optional[Tuple[float, str]] = None
+    for s in sessions:
+        for p, ts in s.writes.items():
+            if p == path.rstrip("/") or (path.endswith("/") and p.startswith(path)):
+                if best is None or ts > best[0]:
+                    best = (ts, s.sid)
+    # A deleted file has no mtime: its deletion time is unknown, so no
+    # recorded write can be shown to explain it.
+    if best is None or mtime is None or best[0] < mtime - SLACK_S:
+        return None
+    return best[1]
+
+
+def _only(cands: List[Sess]) -> Optional[str]:
+    return cands[0].sid if len(cands) == 1 else None
+
+
+def attribute(rs: RepoState, sessions: List[Sess]) -> Tuple[Dict[str, RepoState], RepoState]:
+    """Split one repo's owed work by the session that made it.
+
+    dirty file    the latest session that recorded writing it, when that write
+                  is no older than the file's last change (SLACK_S); else
+                  the one session whose start..last activity spans the
+                  file's mtime, if that session doesn't record writes
+                  (Claude Code). A spanning Hermes session is a rival (it may
+                  have edited through a shell), so it makes the file
+                  unattributed rather than owned
+    commit/stash  the one recorder whose start..last activity spans the
+                  branch tip's / stash entry's time
+
+    Anything else (no candidate, or several) is unattributed: listed, never
+    owed by a session."""
+    owned: Dict[str, RepoState] = {}
+    rest = RepoState(rs.repo, notes=rs.notes, merged=rs.merged)
+
+    def slot(sid: Optional[str]) -> RepoState:
+        if sid is None:
+            return rest
+        return owned.setdefault(sid, RepoState(rs.repo))
+
+    for rel, kind, mt in rs.dirty:
+        sid = _writer(os.path.join(rs.repo, rel), mt, sessions)
+        if sid is None:
+            cands = [s for s in sessions if s.spans(mt)]
+            sid = cands[0].sid if len(cands) == 1 and not cands[0].records_writes else None
+        slot(sid).dirty.append((rel, kind, mt))
+    for b in rs.unpushed:
+        slot(_only([s for s in sessions if s.spans(b[2])])).unpushed.append(b)
+    for t in rs.stashes:
+        slot(_only([s for s in sessions if s.spans(t)])).stashes.append(t)
+    return owned, rest
+
+
 # ---------------------------------------------------------------- sessions
 
-def recorded() -> Dict[str, Dict[str, float]]:
-    """{session id: {repo: last recorded ts}} from every hook state file."""
-    out: Dict[str, Dict[str, float]] = {}
+@dataclass
+class Recorded:
+    """One session's hook state, as audit reads it."""
+    repos: Dict[str, float] = field(default_factory=dict)   # canonical repo -> last recorded ts
+    writes: Dict[str, float] = field(default_factory=dict)  # file path -> ts (Hermes write tools)
+    harness: str = ""
+
+
+def recorded() -> Dict[str, Recorded]:
+    """{session id: Recorded} from every hook state file."""
+    out: Dict[str, Recorded] = {}
     for sid, d in state.recent(10 ** 10):
         repos = d.get("repos") or {}
         if not isinstance(repos, dict):
             continue
-        merged: Dict[str, float] = {}
+        rec = Recorded(harness=str(d.get("harness") or ""))
         for r, t in repos.items():
             if isinstance(r, str) and isinstance(t, (int, float)):
                 c = paths.canonical(r)  # spellings recorded before 1.2.1 can differ in case
-                merged[c] = max(merged.get(c, 0.0), float(t))
-        out[sid] = merged
+                rec.repos[c] = max(rec.repos.get(c, 0.0), float(t))
+        writes = d.get("writes") or {}
+        if isinstance(writes, dict):
+            rec.writes = {p: float(t) for p, t in writes.items()
+                          if isinstance(p, str) and isinstance(t, (int, float))}
+        out[sid] = rec
     return out
 
 
@@ -232,34 +383,46 @@ def classify(info: Optional[Dict[str, Any]], stale_min: int, active_min: int = s
 
 @dataclass
 class Plan:
-    catch_up: List[Tuple[str, RepoState, str]] = field(default_factory=list)  # (sid, state, status)
+    catch_up: List[Tuple[str, RepoState, str]] = field(default_factory=list)  # (sid, its share, status)
     in_use: List[Tuple[str, str]] = field(default_factory=list)              # (repo, active sid)
-    waiting: List[Tuple[str, str]] = field(default_factory=list)             # (repo, idle sid)
-    unowned: List[RepoState] = field(default_factory=list)
+    waiting: List[Tuple[str, str]] = field(default_factory=list)             # (repo, idle sid owing work)
+    pending: List[Tuple[str, str]] = field(default_factory=list)             # (repo, latest idle recorder), not inspected
+    unowned: List[RepoState] = field(default_factory=list)                   # roots repo, no recorder
+    unattributed: List[RepoState] = field(default_factory=list)              # recorded repo, no provable maker
     clean: int = 0
     errors: List[RepoState] = field(default_factory=list)
-    resolved: List[str] = field(default_factory=list)                        # repos now clean (canonical)
+    owing: Dict[str, List[str]] = field(default_factory=dict)                # repo, fully attributed -> sids owing
     truncated: bool = False                                                  # hit the deadline
     noted: List[RepoState] = field(default_factory=list)                     # clean, with notes
     merged_repos: List[RepoState] = field(default_factory=list)              # any branch already on default
-    unshared_repos: List[RepoState] = field(default_factory=list)               # older local-only branches
 
     def as_dict(self) -> Dict[str, Any]:
+        def facts(r: RepoState) -> Dict[str, Any]:
+            return {"repo": r.repo, "findings": r.findings}
         return {"catch_up": [{"session": s, "repo": r.repo, "findings": r.findings, "status": st}
                              for s, r, st in self.catch_up],
                 "in_use": [{"repo": r, "session": s} for r, s in self.in_use],
                 "waiting": [{"repo": r, "session": s} for r, s in self.waiting],
-                "unowned": [{"repo": r.repo, "findings": r.findings, "notes": r.notes,
+                "pending": [{"repo": r, "session": s} for r, s in self.pending],
+                "unowned": [{**facts(r), "notes": r.notes,
                              "already_on_default": [{"branch": b, "commits": n, "default": d} for b, n, d in r.merged]}
                             for r in self.unowned],
+                "unattributed": [facts(r) for r in self.unattributed],
                 "already_on_default": [{"repo": r.repo, "branches": [{"branch": b, "commits": n, "default": d}
                                                                      for b, n, d in r.merged]}
                                        for r in self.merged_repos],
-                "local_branches": [{"repo": r.repo, "branches": [{"branch": b, "commits": n} for b, n in r.unshared]}
-                                   for r in self.unshared_repos],
                 "notes": [{"repo": r.repo, "notes": r.notes} for r in self.noted],
                 "clean": self.clean, "errors": [{"repo": r.repo, "error": r.error} for r in self.errors],
-                "resolved": self.resolved, "truncated": self.truncated}
+                "resolved": sorted(r for r, sids in self.owing.items() if not sids),
+                "truncated": self.truncated}
+
+
+def _sess(sid: str, info: Dict[str, Any], rec: Recorded) -> Sess:
+    def num(k: str) -> Optional[float]:
+        v = info.get(k)
+        return float(v) if isinstance(v, (int, float)) and v else None
+    end = num("ended_at") or num("last_activity_at")
+    return Sess(sid, num("started_at"), end, rec.harness == "hermes", rec.writes)
 
 
 def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional[float] = None,
@@ -273,54 +436,59 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
         info = be.lookup(sid) if be else None
         info_of[sid] = info or {}
         status_of[sid] = classify(info, stale_min)
-    # owner of each recorded repo: an ACTIVE recorder wins; else the latest recorder
-    owner: Dict[str, Tuple[str, float]] = {}
-    active: Dict[str, str] = {}
-    for sid, repos in rec.items():
-        for repo, ts in repos.items():
-            if status_of[sid] == "ACTIVE":
-                active[repo] = sid
-            if repo not in owner or ts > owner[repo][1]:
-                owner[repo] = (sid, ts)
-    candidates = list(dict.fromkeys(list(owner) + ([paths.canonical(str(p)) for r, d in roots() for p in scan(r, d)]
-                                                   if use_roots else [])))
+    recorders: Dict[str, List[str]] = {}   # repo -> sessions that recorded it, latest first
+    for sid, r in rec.items():
+        for repo in r.repos:
+            recorders.setdefault(repo, []).append(sid)
+    for repo, sids in recorders.items():
+        sids.sort(key=lambda s: rec[s].repos[repo], reverse=True)
+    candidates = list(dict.fromkeys(list(recorders) + ([paths.canonical(str(p)) for r, d in roots()
+                                                         for p in scan(r, d)] if use_roots else [])))
     plan = Plan()
     for repo in candidates:
         if deadline is not None and time.monotonic() > deadline:
             plan.truncated = True
             break
-        if repo in active:
-            plan.in_use.append((repo, active[repo]))
+        sids = recorders.get(repo, [])
+        live = [s for s in sids if status_of[s] == "ACTIVE"]
+        if live:
+            plan.in_use.append((repo, live[0]))
             continue
-        if not use_roots and status_of[owner[repo][0]] != "DEAD":
-            plan.waiting.append((repo, owner[repo][0]))  # catch-up: don't spend git calls on live owners
+        if not use_roots and sids and not any(status_of[s] == "DEAD" for s in sids):
+            plan.pending.append((repo, sids[0]))  # catch-up: don't spend git calls on live recorders
             continue
         if not Path(repo).is_dir():
             continue
-        started = info_of.get(owner[repo][0], {}).get("started_at") if repo in owner else None
-        rs = inspect(repo, since=started if isinstance(started, (int, float)) else None)
+        rs = inspect(repo)
         if rs.error:
             plan.errors.append(rs)
             continue
-        if repo in owner:
-            sid = owner[repo][0]
-            if not rs.owed:
-                plan.clean += 1
-                plan.resolved.append(repo)
-            elif status_of[sid] == "DEAD":
-                plan.catch_up.append((sid, rs, why_dead(info_of.get(sid) or {})))
-            else:
-                plan.waiting.append((repo, sid))
-        elif rs.owed:
-            plan.unowned.append(rs)
-        else:
-            plan.clean += 1
         if rs.notes and not rs.owed:
             plan.noted.append(rs)
         if rs.merged:
             plan.merged_repos.append(rs)
-        if rs.unshared:
-            plan.unshared_repos.append(rs)
+        if not sids:
+            if rs.owed:
+                plan.unowned.append(rs)
+            else:
+                plan.clean += 1
+            continue
+        owned, rest = attribute(rs, [_sess(s, info_of[s], rec[s]) for s in sids])
+        if not rs.owed:
+            plan.clean += 1
+        if rest.owed:
+            # Unattributed work keeps every open entry for this repo open: it
+            # may be that entry's work, and closing would lose it.
+            plan.unattributed.append(rest)
+        else:
+            plan.owing[repo] = []
+        for sid, share in owned.items():
+            if repo in plan.owing:
+                plan.owing[repo].append(sid)
+            if status_of[sid] == "DEAD":
+                plan.catch_up.append((sid, share, why_dead(info_of.get(sid) or {})))
+            else:
+                plan.waiting.append((repo, sid))
     return plan
 
 
@@ -351,12 +519,10 @@ def _short(repo: str) -> str:
 def render_entry(sid: str, rs: RepoState, stamp: str, why: str = "idle", eid: str = "") -> str:
     where = _redact(_short(rs.repo))
     head = f"**{stamp} [session {sid} #{eid or entry_id(sid, rs.repo)}] — {HEADLINE_TAG} {where}: owed work.**"
-    body = [f"Found by `inflight audit` (session {why}); not verified by a person.",
+    body = [f"Found by `inflight audit` (session {why}): work this session made, by its recorded "
+            "writes or its active hours; not verified by a person.",
             f"repo: {_redact(rs.repo)}"]
     body += [f"- [ ] {f}" for f in rs.findings]
-    if rs.unshared:
-        body.append("Older local branches, no upstream, last commit before this session started "
-                    "(listed, not owed): " + ", ".join(f"{b} ({n})" for b, n in rs.unshared))
     body.append("Next: verify on disk, then push / commit / drop. Taking it over: append `(took over "
                 f"{sid})` here.")
     return head + "\n" + "\n".join(body)
@@ -415,11 +581,10 @@ def apply(plan: Plan, path: Path, today: Optional[date] = None) -> Dict[str, int
                 counts["updated"] += 1
                 changed = True
             kept.add(id(cur))
-        live = {rs.repo for _, rs, _ in plan.catch_up}
-        resolved = set(plan.resolved)
         for e, repo in mine:
-            # close: the repo is clean, or another entry now holds its owed work
-            if id(e) in kept or (repo not in resolved and repo not in live):
+            # close: the repo was inspected and this entry's session owes
+            # nothing there now (clean, or the work is another session's)
+            if id(e) in kept or repo not in plan.owing or e.session in plan.owing[repo]:
                 continue
             if progress.lifecycle(e.text).state != "done":
                 e.text = progress.set_status(e.text, "done", today)
@@ -430,6 +595,23 @@ def apply(plan: Plan, path: Path, today: Optional[date] = None) -> Dict[str, int
     if changed:
         state.log("audit-apply", event="audit", kinds=[f"{k}={v}" for k, v in counts.items() if v])
     return counts
+
+
+def _closable(plan: Plan, path: Path) -> bool:
+    """An open audit entry whose session owes nothing in its repo now: what
+    apply() would close. Read without the lock; apply() re-reads under it."""
+    if not plan.owing:
+        return False
+    try:
+        rn = core.right_now(core.parse(path.read_text(encoding="utf-8")))
+    except OSError:
+        return False
+    for e in (rn.entries if rn else []):
+        repo = _repo_of(e)
+        if repo in plan.owing and e.session not in plan.owing[repo] \
+                and progress.lifecycle(e.text).state != "done":
+            return True
+    return False
 
 
 def _ended_since(ts: float) -> bool:
@@ -463,9 +645,10 @@ def catch_up(budget_s: float = 3.0, min_interval_s: float = 600.0) -> Optional[D
         # A session only a plugin knows is UNKNOWN here, so it is never written.
         plan = build(use_roots=False, deadline=time.monotonic() + budget_s,
                      be=backends.chain(plugins=False) or False)
-        if not plan.catch_up and not plan.resolved:  # nothing to write: skip the lock
+        path = paths.inflight_file().expanduser()
+        if not plan.catch_up and not _closable(plan, path):  # nothing to write: skip the lock
             return {}
-        return apply(plan, paths.inflight_file().expanduser())
+        return apply(plan, path)
     except Exception as e:  # catch-up must never break a hook or the cron
         state.log("audit-error", event="catch-up", error=type(e).__name__)
         return None
@@ -476,7 +659,7 @@ def catch_up(budget_s: float = 3.0, min_interval_s: float = 600.0) -> Optional[D
 def _print(plan: Plan, apply_mode: bool) -> None:
     print(f"inflight audit ({'apply' if apply_mode else 'dry run: nothing written'})")
     print(f"\ncatch-up: {len(plan.catch_up)} (session ended or idle past the stale limit; "
-          "one entry per repo)")
+          "one entry per session and repo, its own work only)")
     for sid, rs, why in plan.catch_up:
         print(f"  [session {sid}, {why}] {_short(rs.repo)}")
         for f in rs.findings:
@@ -484,6 +667,10 @@ def _print(plan: Plan, apply_mode: bool) -> None:
     if plan.waiting:
         print(f"\nnot yet (owner idle, under the stale limit): {len(plan.waiting)}")
         for repo, sid in plan.waiting:
+            print(f"  {_short(repo)}  ({sid})")
+    if plan.pending:
+        print(f"\nnot inspected (every recorder idle under the stale limit): {len(plan.pending)}")
+        for repo, sid in plan.pending:
             print(f"  {_short(repo)}  ({sid})")
     print(f"\nin use by an ACTIVE session (skipped): {len(plan.in_use)}")
     for repo, sid in plan.in_use:
@@ -501,12 +688,11 @@ def _print(plan: Plan, apply_mode: bool) -> None:
             print(f"  {_short(rs.repo)}:")
             for b, c, d in rs.merged:
                 print(f"      {b} ({c} commit(s), already on {d})")
-    if plan.unshared_repos:
-        total = sum(len(rs.unshared) for rs in plan.unshared_repos)
-        print(f"\nolder local branches (no upstream, last commit before the owning session started; "
-              f"not owed work): {total} branch(es)")
-        for rs in plan.unshared_repos:
-            print(f"  {_short(rs.repo)}: " + ", ".join(f"{b} ({n})" for b, n in rs.unshared))
+    if plan.unattributed:
+        print(f"\nunattributed (recorded repo, but no session provably made it; listed only, never "
+              f"written): {len(plan.unattributed)}")
+        for rs in plan.unattributed:
+            print(f"  {_short(rs.repo)}: " + "; ".join(rs.findings))
     if plan.noted:
         print(f"\nnotes (not owed work): {len(plan.noted)}")
         for rs in plan.noted:

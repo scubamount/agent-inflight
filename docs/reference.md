@@ -199,22 +199,42 @@ the Hermes cron job use.
 |---|---|
 | Uncommitted | `git status` shows changes. Submodules are skipped; they are audited as their own repos. |
 | Unpushed | Commits on no remote-tracking ref (`rev-list <branch> --not --remotes`). A branch with no upstream is flagged `(no upstream)`. |
-| Older local branch | A branch with no upstream whose last commit is older than the owning session's start. The session didn't make it, so it is listed in its own section (and on one line in the entry) and is not owed. |
 | Stash | Any stash entry. |
 | Already on the default branch | Every unpushed commit has a patch-id twin on the remote default branch, for example after a rebase or cherry-pick. This is listed in its own section and is not owed. A squash of several commits has no twin, so it stays unpushed. A failed or timed-out check keeps the branch unpushed. |
 | Note | A branch that is ahead of a stale upstream ref, with its commits already on another remote. This is a note, not owed work. |
 
-**Who owns it.**
+**Who owns it.** Each finding goes to the session that made it, never to
+whoever recorded the repo last:
 
-- A repo whose last recording session is ENDED, or idle past `--stale-min`
-  (default 120 minutes, env `INFLIGHT_STALE_MIN`), gets one entry. The entry
-  is tagged with that session, with the head `audit: <repo>: owed work`, and
-  says whether the session ended or since when it has been idle. Re-runs
-  update it in place. When a newer session becomes the last recorder, its
-  entry replaces the older one, which is marked done.
+| Finding | Owner |
+|---|---|
+| Dirty file | The latest session that recorded writing it (the Hermes plugin records the files `write_file` and `patch` write). If no session recorded it: the one session that doesn't record writes (Claude Code: `tool_input` is never read) whose start to last activity spans the file's mtime. Hermes sessions never own a file by time alone. |
+| Unpushed branch | The one recorder of the repo whose start to last activity spans the branch tip's commit time. |
+| Stash entry | The same, by the stash entry's time. |
+
+No candidate, or more than one, makes the finding **unattributed**: listed in
+its own section, never written to the tracker.
+
+- A recorded write counts only if it is no older than the file's last change
+  minus 120 s; a stale write proves nothing about a newer edit. Failed write
+  calls are not recorded.
+- "Spans" means start to last activity plus 120 s. A Hermes session that
+  spans the time is a rival (it may have edited through a shell, which is
+  never parsed), so the finding is unattributed, not given to Claude Code.
+- An untracked directory's time is the newest file inside it. A deleted file,
+  or a directory with more than 5000 files, has no time and is unattributed.
+- While a repo holds unattributed work, open audit entries for it stay open.
+
+- A session that owes work in a repo and is ENDED, or idle past `--stale-min`
+  (default 120 minutes, env `INFLIGHT_STALE_MIN`), gets one entry per repo,
+  listing only its own findings. The entry is tagged with that session, with
+  the head `audit: <repo>: owed work`, and says whether the session ended or
+  since when it has been idle. Re-runs update it in place.
 - Repos are compared by their canonical path: symlinks resolved and, on
   macOS, the on-disk case, so `~/Code/x` and `~/code/x` are one repo.
-- When the repo is clean again, the entry is marked done, never deleted.
+- When the session owes nothing in the repo any more (clean, or all of the
+  work is attributed to other sessions), the entry is marked done, never
+  deleted.
 - Repos that an ACTIVE session recorded are skipped.
 - Scan-root repos that no session recorded are listed as **unowned** and never
   written to the tracker.
@@ -358,7 +378,7 @@ sessions.
 | `inflight-state/` | 0700 | Everything below |
 | `inflight-state/venv/` | | Private stdlib venv |
 | `inflight-state/inflight` | | Launcher pinned to that venv; hooks call this |
-| `inflight-state/sessions/<id>.json` | 0600 | Per-session hook state: heartbeat, repos touched, end time and reason, harness |
+| `inflight-state/sessions/<id>.json` | 0600 | Per-session hook state: heartbeat, repos touched, files written (Hermes), end time and reason, harness |
 | `inflight-state/config.json` | 0600 | `audit.*` settings and the plugin allowlist |
 | `inflight-state/last-catch-up` | 0600 | Time of the last `session-start` catch-up (rate limit) |
 

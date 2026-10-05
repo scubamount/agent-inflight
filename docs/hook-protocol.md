@@ -26,7 +26,7 @@ inflight hook <event>   < one JSON object on stdin
 
 | Event | Payload | Effect | stdout |
 |---|---|---|---|
-| `session-start` | `session_id, cwd, source` (`new`, `startup`, `resume`, `compact` or `clear`), optional `harness` | Records the session and clears any ended flag. Does **not** record `cwd`'s repo: opening a session in a repo is not touching it, and recording it would make the new session the repo's latest recorder and take over the owed work a dead session left there. Tools and `cwd-changed` record repos. On `new`/`startup`: runs the audit catch-up (recorded repos of ENDED sessions only, built-in backends only, about 3 s budget, at most every 10 min unless a session ended since the last run; writes `## Right now` entries tagged with the dead session). | The brief: the session's own open entries in full, one line per other open entry, at most 6 KB (the same text the Hermes plugin injects; `inflight brief` prints it). Nothing when no entry is open |
+| `session-start` | `session_id, cwd, source` (`new`, `startup`, `resume`, `compact` or `clear`), optional `harness` | Records the session and clears any ended flag. Does **not** record `cwd`'s repo: opening a session in a repo is not touching it, and recording it would make the new session a recorder of that repo, so the dead session's work there would have two candidate owners. Tools and `cwd-changed` record repos. On `new`/`startup`: runs the audit catch-up (recorded repos of ENDED sessions only, built-in backends only, about 3 s budget, at most every 10 min unless a session ended since the last run; writes `## Right now` entries tagged with the dead session that made the work). | The brief: the session's own open entries in full, one line per other open entry, at most 6 KB (the same text the Hermes plugin injects; `inflight brief` prints it). Nothing when no entry is open |
 | `pre-tool` | `session_id, cwd, tool, call_id` | Heartbeat | A collision warning, once per (session, repo), when another session with a heartbeat in the last 15 min touched the same repo |
 | `post-tool` | `session_id, cwd, tool, call_id` | Heartbeat. Records `cwd`'s repo as touched | none |
 | `cwd-changed` | `session_id, cwd` | Heartbeat. Records the repo | none |
@@ -42,7 +42,7 @@ A "repo" is the nearest ancestor of `cwd` containing `.git`. It is found by chec
 | Path | Mode | Content |
 |---|---|---|
 | `<tracker dir>/inflight-state/` | 0700 | |
-| `…/sessions/<id>.json` | 0600 | `session, started_at, heartbeat_at, ended_at, end_reason, repos{path: ts}, warned[], harness` |
+| `…/sessions/<id>.json` | 0600 | `session, started_at, heartbeat_at, ended_at, end_reason, repos{path: ts}, writes{file: ts}, warned[], harness` (`writes`: Hermes plugin only, newest 2000) |
 | `<tracker dir>/inflight-archive/hooks.log` | 0600 | One JSON line per action. Only these keys are written: `ts, action, event, session, entry_id, kinds, plugin, error` |
 
 `hooks.log` also records every `inflight add --force` that overrides the credential check (`action: secret-force`, entry id and pattern kinds only), as an audit trail.

@@ -2,6 +2,27 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.3.0
+
+### Changed
+
+- `inflight audit` attributes each finding to the session that made it, not
+  to whichever session recorded the repo last. A dirty file goes to the
+  session that recorded writing it (the Hermes plugin now records the files
+  `write_file` and `patch` write), else to the one Claude Code session whose
+  active hours span the file's mtime. An unpushed branch or stash entry goes
+  to the one recorder whose active hours span its time. Anything else is
+  **unattributed**: listed, never written. Catch-up entries list only their
+  session's own work, one per (session, repo).
+- An entry closes when its session owes nothing in the repo any more, not
+  only when the repo is clean. While the repo holds unattributed work, its
+  open entries stay open.
+- `--json`: `pending` lists repos not inspected because every recorder is
+  idle under the stale limit (they were in `waiting` before).
+- The "older local branches" section is gone: a branch no session made is
+  unattributed.
+- `--json`: new `unattributed`; `local_branches` removed.
+
 ## 1.2.3
 
 ### Fixed

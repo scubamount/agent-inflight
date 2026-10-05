@@ -11,7 +11,9 @@ transform_tool_result if the file changed, rewrite literal `[session $VAR]`
                       Also records the repo the call touched (session
                       cwd, `workdir`, file `path`) in the session's hook
                       state for `inflight audit`; one write per (session,
-                      repo) per minute. If another live session touched that
+                      repo) per minute. For `write_file` / `patch` it also
+                      records the files written, so audit attributes a dirty
+                      file to the session that wrote it. If another live session touched that
                       repo within `state.ACTIVE_MIN` (15 min), appends the collision warning
                       to the result, once per (session, repo). Informs only.
 
@@ -33,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -127,11 +130,8 @@ _recorded: Dict[Tuple[str, str], float] = {}
 _RECORDED_MAX = 4096
 
 
-def _call_dirs(task_id: str, args: Any) -> List[str]:
-    """Where this call ran: the session's recorded terminal cwd (Hermes keeps it
-    per task), plus the structured `workdir` / file `path` arguments. Command
-    strings are never parsed."""
-    out: List[str] = []
+def _session_cwd(task_id: str) -> str:
+    """The session's recorded terminal cwd (Hermes keeps it per task), or ''."""
     cwd = ""
     try:
         from tools.terminal_tool import get_session_cwd  # Hermes internal; absent -> skip
@@ -153,10 +153,15 @@ def _call_dirs(task_id: str, args: Any) -> List[str]:
             cwd = get_session_cwd(k or None) or ""
             if cwd:
                 break
-        if cwd:
-            out.append(cwd)
     except Exception:
         pass
+    return cwd
+
+
+def _call_dirs(cwd: str, args: Any) -> List[str]:
+    """Where this call ran: the session's terminal cwd plus the structured
+    `workdir` / file `path` arguments. Command strings are never parsed."""
+    out: List[str] = [cwd] if cwd else []
 
     def anchored(d: str) -> Optional[str]:
         # Relative args are relative to the SESSION cwd. The daemon's own
@@ -181,15 +186,88 @@ def _call_dirs(task_id: str, args: Any) -> List[str]:
     return out
 
 
-def record_repos(session_id: str, task_id: str, args: Any) -> List[str]:
-    """Record the repos this call touched in the session's hook state, so
-    `inflight audit` can attribute owed work to Hermes sessions too. Returns
-    the collision warnings (same text and once-per-repo rule as the hook)."""
+_V4A_FILE = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$", re.M)
+_V4A_MOVE = re.compile(r"^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$", re.M)
+
+
+def written_files(tool_name: str, cwd: str, args: Any) -> List[str]:
+    """Files a Hermes write tool (`write_file`, `patch`) writes, as absolute
+    canonical paths. From the structured `path` and, for a V4A patch, the
+    file headers in the patch body (the format the tool itself parses).
+    Shell commands are never parsed: their writes stay unrecorded and audit
+    falls back to unattributed."""
+    if tool_name not in _EDIT_TOOLS or not isinstance(args, dict):
+        return []
+    raw: List[str] = []
+    p = args.get("path")
+    if isinstance(p, str) and p:
+        raw.append(p)
+    body = args.get("patch")
+    if tool_name == "patch" and isinstance(body, str):
+        raw += _V4A_FILE.findall(body)
+        for a, b in _V4A_MOVE.findall(body):
+            raw += [a, b]
+    out: List[str] = []
+    for f in raw:
+        f = os.path.expanduser(f)
+        if not os.path.isabs(f):
+            if not (cwd and os.path.isabs(cwd)):
+                continue  # relative to an unknown cwd: never guessed
+            f = os.path.join(cwd, f)
+        f = os.path.normpath(f)
+        # canonical() fixes symlinks and on-disk case; a file that no longer
+        # exists keeps its leaf as given under the canonical directory
+        d, name = os.path.split(f)
+        c = paths.canonical(f) if os.path.exists(f) else (
+            os.path.join(paths.canonical(d), name) if os.path.isdir(d) else f)
+        if c not in out:
+            out.append(c)
+    return out
+
+
+def _failed(result: Any) -> bool:
+    """A write tool's result that says nothing was written: a JSON object
+    with `error`, or `success: false` (Hermes tool_error / patch results)."""
+    if not isinstance(result, str) or not result.lstrip().startswith("{"):
+        return False
+    try:
+        import json
+        d = json.loads(result)
+    except ValueError:
+        return False
+    return isinstance(d, dict) and (bool(d.get("error")) or d.get("success") is False)
+
+
+WRITES_EVERY_S = 30  # at most one state write per (session, file) per 30 s
+_written: Dict[Tuple[str, str], float] = {}
+
+
+def record_repos(session_id: str, task_id: str, args: Any, tool_name: str = "",
+                 result: Any = None) -> List[str]:
+    """Record the repos this call touched (and the files a write tool wrote)
+    in the session's hook state, so `inflight audit` can attribute owed work
+    to Hermes sessions too. Returns the collision warnings (same text and
+    once-per-repo rule as the hook)."""
     if not state.valid_sid(session_id):
         return []
     now = time.monotonic()
     warnings: List[str] = []
-    for d in _call_dirs(task_id, args):
+    cwd = _session_cwd(task_id)
+    files: List[str] = []
+    if not _failed(result):
+        for f in written_files(tool_name, cwd, args):
+            if not state.repo_root(os.path.dirname(f)):
+                continue
+            with _lock:
+                if now - _written.get((session_id, f), -WRITES_EVERY_S) < WRITES_EVERY_S:
+                    continue
+                if len(_written) >= _RECORDED_MAX:
+                    _written.clear()
+                _written[(session_id, f)] = now
+            files.append(f)
+    if files:
+        state.update(session_id, writes=files, harness="hermes")
+    for d in _call_dirs(cwd, args):
         repo = state.repo_root(d)
         if not repo:
             continue
@@ -212,7 +290,7 @@ def on_transform_tool_result(tool_name: str = "", args: Any = None, result: Any 
                              **_: Any) -> Optional[str]:
     warnings: List[str] = []
     try:
-        warnings = record_repos(session_id, task_id, args)
+        warnings = record_repos(session_id, task_id, args, tool_name, result)
     except Exception:
         logger.debug("agent-inflight repo record failed", exc_info=True)
     with _lock:

@@ -84,17 +84,28 @@ class World(unittest.TestCase):
         d.mkdir(parents=True, exist_ok=True)
         (d / "config.json").write_text(json.dumps({"audit": {"roots": roots}}))
 
-    def session(self, sid: str, repos, ended: bool = False, idle_s: float = 0):
+    def session(self, sid: str, repos, ended: bool = False, idle_s: float = 0, harness: str = ""):
+        """A write-blind session (Claude Code style) active for the hour before
+        `idle_s` ago. The repos' working files are back-dated into that hour,
+        as if this session wrote them: attribution reads mtimes."""
         for r in repos:
             state.update(sid, repo=str(r))
         p = state.session_path(sid)
         d = json.loads(p.read_text())
         d["heartbeat_at"] = time.time() - idle_s
         d["started_at"] = time.time() - idle_s - 3600  # began before the fixture's commits
+        if harness:
+            d["harness"] = harness
         if ended:
             d["ended_at"] = time.time() - idle_s
             d["end_reason"] = "end"
         p.write_text(json.dumps(d))
+        if idle_s:
+            when = time.time() - idle_s - 60
+            for r in repos:
+                for f in Path(r).rglob("*"):
+                    if ".git" not in f.relative_to(r).parts:
+                        os.utime(f, (when, when), follow_symlinks=False)
 
     def hostile(self, path: Path) -> Path:
         """Repo-local config that runs a marker script from every channel git
@@ -297,9 +308,125 @@ class Classify(World):
         plan = audit.build(stale_min=120)
         self.assertEqual([s for s, _, _ in plan.catch_up], ["idle-1"])
 
+    def test_catch_up_path_marks_uninspected_repos_pending(self):
+        r = mkrepo(self.code / "pd", self.remote)
+        (r / "a.txt").write_text("x\n")
+        self.session("idle-2", [r], idle_s=30 * 60)
+        plan = audit.build(use_roots=False, stale_min=120)
+        self.assertEqual((plan.waiting, [s for _, s in plan.pending]), ([], ["idle-2"]))
+
+
+class Attribution(World):
+    def sess(self, sid, start_ago, end_ago, hermes=False, writes=None):
+        now = time.time()
+        return audit.Sess(sid, now - start_ago, now - end_ago, hermes, writes or {})
+
+    def test_write_blind_needs_exactly_one_spanning_session(self):
+        r = mkrepo(self.code / "a", self.remote)
+        (r / "a.txt").write_text("x\n")
+        rs = audit.inspect(str(r))
+        one = self.sess("cc-1", 600, 0)
+        owned, rest = audit.attribute(rs, [one])
+        self.assertEqual((list(owned), rest.owed), (["cc-1"], False))
+        owned, rest = audit.attribute(rs, [one, self.sess("cc-2", 900, 0)])  # both span: ambiguous
+        self.assertEqual((owned, rest.findings), ({}, ["uncommitted: 1 modified"]))
+        owned, rest = audit.attribute(rs, [self.sess("cc-3", 7200, 3600)])  # ended before the edit
+        self.assertEqual((owned, rest.findings), ({}, ["uncommitted: 1 modified"]))
+
+    def test_hermes_hours_never_attribute_a_dirty_file(self):
+        r = mkrepo(self.code / "b", self.remote)
+        (r / "a.txt").write_text("x\n")
+        owned, rest = audit.attribute(audit.inspect(str(r)), [self.sess("h-1", 600, 0, hermes=True)])
+        self.assertEqual((owned, rest.findings), ({}, ["uncommitted: 1 modified"]))
+
+    def test_untracked_dir_owned_by_writer_of_a_file_inside(self):
+        r = mkrepo(self.code / "c", self.remote)
+        (r / "new").mkdir()
+        (r / "new" / "f.py").write_text("x\n")
+        c = paths.canonical(str(r))
+        h = self.sess("h-2", 600, 0, hermes=True, writes={os.path.join(c, "new", "f.py"): time.time()})
+        owned, rest = audit.attribute(audit.inspect(c), [h])
+        self.assertEqual((owned["h-2"].findings, rest.owed), (["uncommitted: 1 untracked"], False))
+
+    def test_stash_and_commit_by_time(self):
+        r = mkrepo(self.code / "d", self.remote)
+        (r / "a.txt").write_text("s\n")
+        git(r, "stash", "-q")
+        (r / "b.txt").write_text("b\n")
+        git(r, "add", "-A")
+        git(r, "commit", "-qm", "local")
+        rs = audit.inspect(str(r))
+        owned, rest = audit.attribute(rs, [self.sess("h-3", 600, 0, hermes=True), self.sess("old", 9000, 7200)])
+        self.assertEqual(owned["h-3"].findings, ["1 unpushed commit(s) on main", "1 stash entry"])
+        self.assertFalse(rest.owed)
+
+    def test_stale_write_loses_to_newer_edit(self):
+        r = mkrepo(self.code / "f", self.remote)
+        (r / "a.txt").write_text("today\n")
+        c = paths.canonical(str(r))
+        h = self.sess("h-old", 40 * 86400, 39 * 86400, hermes=True,
+                      writes={os.path.join(c, "a.txt"): time.time() - 39 * 86400})
+        cc = self.sess("cc-now", 600, 0)
+        owned, rest = audit.attribute(audit.inspect(c), [h, cc])
+        self.assertEqual((list(owned), rest.owed), (["cc-now"], False))
+
+    def test_hermes_shell_edit_rivals_claude_code(self):
+        r = mkrepo(self.code / "g", self.remote)
+        (r / "a.txt").write_text("sed -i\n")
+        owned, rest = audit.attribute(audit.inspect(str(r)),
+                                      [self.sess("h-4", 600, 0, hermes=True), self.sess("cc-4", 600, 0)])
+        self.assertEqual((owned, rest.findings), ({}, ["uncommitted: 1 modified"]))
+
+    def test_untracked_dir_time_is_newest_file_inside(self):
+        r = mkrepo(self.code / "h", self.remote)
+        (r / "new").mkdir()
+        (r / "new" / "f.py").write_text("x\n")
+        old = time.time() - 5 * 86400
+        os.utime(r / "new", (old, old))
+        os.utime(r / "new" / "f.py", (old, old))
+        (r / "new" / "f.py").write_text("edited today\n")  # dir mtime unchanged
+        os.utime(r / "new", (old, old))
+        owned, _ = audit.attribute(audit.inspect(str(r)), [self.sess("cc-5", 600, 0)])
+        self.assertEqual(list(owned), ["cc-5"])
+
+    def test_deleted_file_never_given_to_recorded_writer(self):
+        r = mkrepo(self.code / "d", self.remote)
+        (r / "a.txt").unlink()
+        c = paths.canonical(str(r))
+        h = self.sess("h-del", 40 * 86400, 39 * 86400, hermes=True,
+                      writes={os.path.join(c, "a.txt"): time.time() - 39 * 86400})
+        owned, rest = audit.attribute(audit.inspect(c), [h])
+        self.assertEqual((owned, rest.owed), ({}, True))
+
+    def test_untracked_dir_too_big_has_no_time(self):
+        r = mkrepo(self.code / "big", self.remote)
+        (r / "new").mkdir()
+        for i in range(5001):
+            (r / "new" / f"{i}").touch()
+        self.assertIsNone(audit._mtime(str(r), "new/"))
+        self.assertIsNotNone(audit._mtime(str(r), "a.txt"))
+
+    def test_copy_status_skips_source_field(self):
+        self.assertEqual(audit._status_paths("C  b.txt\0a.txt\0?? n o\0 M x\0"),
+                         [("b.txt", "modified"), ("n o", "untracked"), ("x", "modified")])
+
+    def test_writes_cap_keeps_newest(self):
+        state.update("cap-1", writes=[f"/x/{i}" for i in range(state.WRITES_MAX)])
+        time.sleep(0.01)
+        state.update("cap-1", writes=["/x/new"])
+        w = state.load("cap-1")["writes"]
+        self.assertEqual(len(w), state.WRITES_MAX)
+        self.assertIn("/x/new", w)
+
+    def test_rename_is_one_dirty_path(self):
+        r = mkrepo(self.code / "e", self.remote)
+        git(r, "mv", "a.txt", "renamed file.txt")
+        rs = audit.inspect(str(r))
+        self.assertEqual([(p, k) for p, k, _ in rs.dirty], [("renamed file.txt", "modified")])
+
 
 class LocalBranches(World):
-    def test_old_branch_without_upstream_is_listed_not_owed(self):
+    def test_old_branch_is_unattributed_not_owed(self):
         r = mkrepo(self.code / "lb", self.remote)
         git(r, "checkout", "-q", "-b", "old-backup")
         (r / "o.txt").write_text("o\n")
@@ -312,10 +439,12 @@ class LocalBranches(World):
         (r / "f.txt").write_text("f\n")
         git(r, "add", "-A")
         git(r, "commit", "-qm", "fresh")
-        rs = audit.inspect(str(r), since=time.time() - 3600)
-        self.assertEqual(rs.unshared, [("old-backup", "1")])
-        self.assertEqual(rs.findings, ["1 unpushed commit(s) on fresh (no upstream)"])
-        self.assertEqual(len(audit.inspect(str(r)).findings), 2)  # no session start: all owed
+        rs = audit.inspect(str(r))
+        self.assertEqual(len(rs.findings), 2)  # facts: both branches are unpushed
+        sess = audit.Sess("s1", time.time() - 3600, time.time(), False)
+        owned, rest = audit.attribute(rs, [sess])
+        self.assertEqual(owned["s1"].findings, ["1 unpushed commit(s) on fresh (no upstream)"])
+        self.assertEqual(rest.findings, ["1 unpushed commit(s) on old-backup (no upstream)"])
 
 
 class Unpushed(World):
@@ -507,22 +636,57 @@ class Apply(World):
             self.skipTest("case-insensitive filesystem")
         flipped = str(self.r).replace("/proj", "/PROJ")
         self.assertEqual(paths.canonical(flipped), paths.canonical(str(self.r)))
-        self.session("dead-2", [flipped], ended=True)
+        self.session("dead-2", [flipped], ended=True, idle_s=2 * 3600)  # its hour holds the change
         rec = audit.recorded()
-        self.assertEqual(list(rec["dead-2"]), [paths.canonical(str(self.r))])
+        self.assertEqual(list(rec["dead-2"].repos), [paths.canonical(str(self.r))])
         audit.apply(audit.build(), self.tracker)
         open_ = [e for e in self.entries() if progress.lifecycle(e.text).state != "done"]
         self.assertEqual(len(open_), 1, [e.head for e in self.entries()])
 
-    def test_duplicate_entry_for_same_repo_closed(self):
-        """An entry another session got for this repo (written before 1.2.1,
-        under a different spelling) is closed once a newer recorder owns it."""
+    def test_newer_recorder_does_not_take_over(self):
+        """A later session that only recorded the repo does not inherit its
+        work. Two write-blind sessions whose hours both span the change: no
+        single maker, so the work is unattributed, and dead-1's entry stays
+        open (it may be its work) until the repo is clean."""
         audit.apply(audit.build(), self.tracker)
         old = self.entries()[0]
-        self.session("dead-3", [self.r], ended=True)  # newer recorder of the same repo
+        self.session("dead-3", [self.r], ended=True)  # same hour as dead-1
+        plan = audit.build()
+        self.assertEqual(plan.catch_up, [])
+        self.assertEqual([rs.findings for rs in plan.unattributed], [["uncommitted: 1 modified"]])
+        audit.apply(plan, self.tracker)
+        by = {e.session: progress.lifecycle(e.text).state for e in self.entries()}
+        self.assertEqual(by, {"dead-1": "active"}, old.head)
+        git(self.r, "checkout", "-q", "--", "a.txt")
+        audit.apply(audit.build(), self.tracker)
+        self.assertEqual({e.session: progress.lifecycle(e.text).state for e in self.entries()}, {"dead-1": "done"})
+
+    def test_recorded_write_wins_over_hours(self):
+        """#12fbdf88: the session that wrote the file owns it, whoever recorded
+        the repo last; another dead session's entry for that work closes."""
+        audit.apply(audit.build(), self.tracker)
+        self.session("herm-1", [self.r], ended=True, harness="hermes")
+        state.update("herm-1", writes=[os.path.join(paths.canonical(str(self.r)), "a.txt")])
+        d = json.loads(state.session_path("herm-1").read_text())
+        d["ended_at"] = time.time()
+        state.session_path("herm-1").write_text(json.dumps(d))
         audit.apply(audit.build(), self.tracker)
         by = {e.session: progress.lifecycle(e.text).state for e in self.entries()}
-        self.assertEqual(by, {"dead-1": "done", "dead-3": "active"}, old.head)
+        self.assertEqual(by, {"dead-1": "done", "herm-1": "active"})
+
+    def test_hermes_session_owns_only_its_writes(self):
+        """A Hermes session that recorded the repo but wrote other files does
+        not own the dirty file (it records writes, so hours don't count)."""
+        r = mkrepo(self.code / "h", self.remote)
+        (r / "a.txt").write_text("not mine\n")
+        (r / "mine.txt").write_text("mine\n")
+        self.session("herm-2", [r], ended=True, harness="hermes")
+        state.update("herm-2", writes=[os.path.join(paths.canonical(str(r)), "mine.txt")])
+        plan = audit.build()
+        mine = [(s, rs.findings) for s, rs, _ in plan.catch_up if rs.repo == paths.canonical(str(r))]
+        self.assertEqual(mine, [("herm-2", ["uncommitted: 1 untracked"])])
+        self.assertIn(["uncommitted: 1 modified"],
+                      [rs.findings for rs in plan.unattributed if rs.repo == paths.canonical(str(r))])
 
     def test_reopen_when_work_returns(self):
         audit.apply(audit.build(), self.tracker)
@@ -597,6 +761,24 @@ class CatchUp(World):
         self.assertNotIn("[session new-1 #", text)
         self.assertNotIn(str(r), (state.load("new-1").get("repos") or {}))
 
+    def test_catch_up_skips_lock_when_nothing_due(self):
+        r = mkrepo(self.code / "cl", self.remote)
+        self.session("dead-1", [r], ended=True)  # clean repo, no open entry
+        before = self.tracker.stat().st_mtime_ns
+        self.assertEqual(audit.catch_up(min_interval_s=0), {})
+        self.assertEqual(self.tracker.stat().st_mtime_ns, before)
+
+    def test_catch_up_closes_entry_when_repo_cleaned(self):
+        r = mkrepo(self.code / "cc", self.remote)
+        self.session("dead-1", [r], ended=True)
+        (r / "a.txt").write_text("d\n")
+        self.session("dead-1", [r], ended=True)  # back-date the edit into its hour
+        self.assertEqual(audit.catch_up(min_interval_s=0).get("added"), 1)
+        git(r, "checkout", "-q", "--", "a.txt")
+        self.assertEqual(audit.catch_up(min_interval_s=0).get("done"), 1)  # _closable let it take the lock
+        e = [e for e in core.right_now(core.parse(self.tracker.read_text())).entries if e.session == "dead-1"]
+        self.assertEqual([progress.lifecycle(x.text).state for x in e], ["done"])
+
     def test_catch_up_skips_scan_roots(self):
         u = mkrepo(self.code / "orphan", self.remote)
         (u / "a.txt").write_text("x\n")
@@ -632,6 +814,54 @@ class HermesRecording(World):
         self.p.on_transform_tool_result(tool_name="terminal", args={"command": "ls", "workdir": str(self.r)},
                                         result="{}", session_id="hsess-1", tool_call_id="c2")
         self.assertEqual(state.load("hsess-1")["heartbeat_at"], hb, "second write within a minute")
+
+    def test_write_tools_record_written_files(self):
+        c = paths.canonical(str(self.r))
+        self.p.on_transform_tool_result(tool_name="write_file", args={"path": str(self.r / "src" / "x.py")},
+                                        result="{}", session_id="hsess-3", tool_call_id="c1")
+        body = f"*** Begin Patch\n*** Update File: {self.r}/a.txt\n@@\n-a\n+b\n" \
+               f"*** Move File: {self.r}/m.txt -> {self.r}/n.txt\n*** End Patch\n"
+        self.p.on_transform_tool_result(tool_name="patch", args={"mode": "patch", "patch": body},
+                                        result="{}", session_id="hsess-3", tool_call_id="c2")
+        self.p.on_transform_tool_result(tool_name="terminal", args={"command": f"echo > {self.r}/t.txt"},
+                                        result="{}", session_id="hsess-3", tool_call_id="c3")
+        self.p.on_transform_tool_result(tool_name="write_file", args={"path": "/tmp/not-a-repo-file.txt"},
+                                        result="{}", session_id="hsess-3", tool_call_id="c4")
+        self.p.on_transform_tool_result(tool_name="write_file", args={"path": "rel.txt"},
+                                        result="{}", session_id="hsess-3", tool_call_id="c5")
+        for i, res in enumerate(('{"error": "refused"}', '{"success": false, "error": "hunk mismatch"}')):
+            self.p.on_transform_tool_result(tool_name="patch", args={"path": str(self.r / f"fail{i}.txt")},
+                                            result=res, session_id="hsess-3", tool_call_id=f"f{i}")
+        link = self.t / "link"
+        link.symlink_to(self.r)
+        self.p.on_transform_tool_result(tool_name="write_file", args={"path": str(link / "via-link.txt")},
+                                        result="{}", session_id="hsess-3", tool_call_id="c6")
+        w = sorted(state.load("hsess-3").get("writes", {}))
+        self.assertEqual(w, sorted(os.path.join(c, f) for f in ("src/x.py", "a.txt", "m.txt", "n.txt",
+                                                                 "via-link.txt")))
+
+    def test_repeat_write_rate_limited(self):
+        f = str(self.r / "rl.txt")
+        for i in range(3):
+            self.p.on_transform_tool_result(tool_name="write_file", args={"path": f}, result="{}",
+                                            session_id="hsess-rl", tool_call_id=f"r{i}")
+            if i == 0:
+                first = state.load("hsess-rl")["writes"]
+        self.assertEqual(state.load("hsess-rl")["writes"], first)
+
+    @unittest.skipUnless(sys.platform == "darwin", "case-insensitive filesystem")
+    def test_case_variant_leaf_canonicalized(self):
+        (self.r / "README.md").write_text("x\n")
+        c = paths.canonical(str(self.r))
+        self.assertEqual(self.p.written_files("write_file", "", {"path": str(self.r / "README.MD")}),
+                         [os.path.join(c, "README.md")])
+
+    def test_relative_v4a_path_resolved_against_session_cwd(self):
+        c = paths.canonical(str(self.r))
+        self.assertEqual(self.p.written_files("patch", str(self.r), {"mode": "patch",
+                         "patch": "*** Begin Patch\n*** Add File: src/new.py\n+x\n*** End Patch\n"}),
+                         [os.path.join(c, "src", "new.py")])
+        self.assertEqual(self.p.written_files("patch", "", {"path": "src/new.py"}), [])  # no cwd: dropped
 
     def test_command_text_never_parsed_and_bad_sid_ignored(self):
         self.p.on_transform_tool_result(tool_name="terminal", args={"command": f"cd {self.r} && git status"},

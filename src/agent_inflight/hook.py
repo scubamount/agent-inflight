@@ -125,9 +125,8 @@ def handle(event: str, payload: Dict[str, Any]) -> str:
         return ""
     cwd = payload.get("cwd")
     # session-start records nothing: opening in a repo is not touching it. If
-    # it counted, every new session would become the latest recorder of the
-    # repo it opened in and take over (or hide) the owed work a dead session
-    # left there, so catch-up would tag the wrong session.
+    # it counted, every new session would become a recorder of the repo it
+    # opened in, a second candidate owner of the work a dead session left there.
     repo = state.repo_root(cwd) if event in ("pre-tool", "post-tool", "cwd-changed") else None
 
     if event == "session-end":

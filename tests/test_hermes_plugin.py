@@ -338,7 +338,7 @@ class CallDirs(TmpHome):
         super().tearDown()
 
     def dirs(self, args):
-        return self.p._call_dirs("task-1", args)
+        return self.p._call_dirs(self.p._session_cwd("task-1"), args)
 
     def test_bare_relative_path_uses_session_cwd(self):
         self.session_cwd = str(self.sess)
