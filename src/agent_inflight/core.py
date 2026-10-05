@@ -71,6 +71,11 @@ class Entry:
         return m.group(1) if m else None
 
     @property
+    def label(self) -> str:
+        """The head as plain text: bold markers dropped, whitespace collapsed."""
+        return " ".join(self.head.replace("**", "").split())
+
+    @property
     def id(self) -> Optional[str]:
         """`#<id>` from the head tag (real or literal), or a bare `[#<id>]`."""
         m = TAG_RE.search(self.head)
@@ -115,6 +120,11 @@ def split_entries(body: str) -> Tuple[str, List[Entry]]:
         else:
             lead.append(line)
     return "\n".join(lead), [Entry("\n".join(e).strip("\n")) for e in entries]
+
+
+def normalize_id(needle: str) -> str:
+    """`#A1b2C3 ` -> `a1b2c3`: how every command reads an entry id it was given."""
+    return needle.strip().lstrip("#").lower()
 
 
 def new_id(seed: str, taken: "set[str]") -> str:

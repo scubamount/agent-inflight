@@ -112,8 +112,8 @@ def match(entries: "List[core.Entry]", needle: str) -> List[int]:
     """Indexes of entries matching `needle`: an exact entry id (`a1b2c3` or
     `#a1b2c3`) wins outright; otherwise a case-insensitive substring of the
     head (session id, date, headline words)."""
-    n = needle.strip().lstrip("#")
-    by_id = [i for i, e in enumerate(entries) if e.id and e.id == n.lower()]
+    n = core.normalize_id(needle)
+    by_id = [i for i, e in enumerate(entries) if e.id and e.id == n]
     if by_id:
         return by_id
     low = needle.strip().lower()
@@ -193,11 +193,11 @@ def _edit_locked(path: Path, needle: str, dry_run: bool, verb: str, past: str, c
         print(f"{len(hits)} entries match {needle!r}; use the entry id or more words:", file=sys.stderr)
         for i in hits:
             e = rn.entries[i]
-            print(f"  #{e.id or '------'}  {' '.join(e.head.replace('**', '').split())[:100]}", file=sys.stderr)
+            print(f"  #{e.id or '------'}  {e.label[:100]}", file=sys.stderr)
         return 2
     e = rn.entries[hits[0]]
     new_text = change(e.text)
-    label = " ".join(e.head.replace("**", "").split())[:100]
+    label = e.label[:100]
     if new_text == e.text:
         print(f"unchanged (already so): {label}")
         return 0

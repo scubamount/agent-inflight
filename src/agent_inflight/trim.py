@@ -161,9 +161,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--done-grace-days", type=int,
                     default=paths.env_int("INFLIGHT_DONE_GRACE_DAYS", DEFAULT_DONE_GRACE_DAYS))
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
+    ap.add_argument("--dry-run", action="store_true", help="the default; accepted for clarity (overrides --apply)")
     ap.add_argument("--file", "--path", dest="file", type=Path, default=None)
     ap.add_argument("--today", help=argparse.SUPPRESS)  # tests pin the clock
     args = ap.parse_args(argv)
+    if args.dry_run:
+        args.apply = False
 
     path = (args.file or paths.inflight_file()).expanduser()
     if not path.exists():
@@ -181,9 +184,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     before_b, after_b = len(original.encode()), len(new_text.encode())
     print(f"{path}: {before_b:,}B (~{before_b // 4:,} tok) -> {after_b:,}B (~{after_b // 4:,} tok)")
     for h in p.paused:
-        print(f"  pause (stale {args.stale_days}d+): {' '.join(h.replace('**', '').split())[:100]}")
+        print(f"  pause (stale {args.stale_days}d+): {core.Entry(h).label[:100]}")
     for a in archived:
-        print(f"  archive: {' '.join(a.split(chr(10), 1)[0].replace('**', '').split())[:100]}")
+        print(f"  archive: {core.Entry(a).label[:100]}")
     print(f"{len(p.paused)} entr{'y' if len(p.paused) == 1 else 'ies'} to pause, {len(archived)} block(s) to archive")
     if not archived and new_text == original:
         print("already trimmed — nothing to do")

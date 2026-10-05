@@ -16,7 +16,9 @@ shared Markdown tracker of in-flight agent work. It is not a pip package:
 |---|---|
 | `bin/inflight` | Entry script; adds `src/` to the path and calls `agent_inflight.cli.main` |
 | `src/agent_inflight/cli.py` | Command dispatch. `hook`, `plugin`, `audit` and `adapter` import lazily. |
-| `src/agent_inflight/core.py`, `entries.py`, `progress.py` | Parser, `add`, `done`, `check`, and entry state |
+| `src/agent_inflight/core.py`, `entries.py`, `progress.py` | Parser, `add`, `done`, `wait`, `check`, and entry state |
+| `src/agent_inflight/history.py` | `show` and `log`: the tracker and the archive as one history |
+| `src/agent_inflight/retag.py` | Hermes plugin: rewrites a literal `[session $VAR]` tag this session wrote |
 | `src/agent_inflight/trim.py` | Budget, pause and archive policy (its docstring is the spec) |
 | `src/agent_inflight/sessions.py`, `backends.py`, `plugins.py` | Status lookup, built-in backends, plugin allowlist |
 | `src/agent_inflight/hook.py`, `state.py` | Hook protocol v1, per-session state |

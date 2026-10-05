@@ -40,7 +40,7 @@ from . import paths, state
 
 HOOK_PROTOCOL_VERSION = 1
 EVENTS = ("session-start", "pre-tool", "post-tool", "cwd-changed", "session-end", "heartbeat")
-ACTIVE_WINDOW_S = 15 * 60
+ACTIVE_WINDOW_S = state.ACTIVE_MIN * 60
 
 
 def _sid(payload: Dict[str, Any]) -> str:

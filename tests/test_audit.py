@@ -29,7 +29,7 @@ GIT_ID = ("-c", "user.email=t@example.invalid", "-c", "user.name=t", "-c", "comm
 def git(repo: Path, *args: str) -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     return subprocess.run(["git", *GIT_ID, *args], cwd=str(repo), env=env, capture_output=True, text=True,
-                          check=True, timeout=30).stdout
+                          check=True, timeout=30, stdin=subprocess.DEVNULL).stdout
 
 
 def mkrepo(path: Path, remote: "Path | None" = None) -> Path:
@@ -152,11 +152,12 @@ class SafeGit(World):
         for m in self.marks.iterdir():
             m.unlink()
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-        subprocess.run(["git", "status", "--porcelain"], cwd=str(r), env=env, capture_output=True, timeout=30)
+        subprocess.run(["git", "status", "--porcelain"], cwd=str(r), env=env, capture_output=True, timeout=30,
+                       stdin=subprocess.DEVNULL)
         self.assertIn("fsmonitor", self.marks_now())
         # the fixture's fsmonitor answers "nothing changed", hiding the filters; switch only it off
         subprocess.run(["git", "-c", "core.fsmonitor=false", "status", "--porcelain"], cwd=str(r), env=env,
-                       capture_output=True, timeout=30)
+                       capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
         for m in ("clean", "process", "include"):
             self.assertIn(m, self.marks_now())
 
@@ -189,7 +190,8 @@ class SafeGit(World):
         top, _ = self.hostile_submodule()
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         subprocess.run(["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "status",
-                        "--porcelain"], cwd=str(top), env=env, capture_output=True, timeout=30)
+                        "--porcelain"], cwd=str(top), env=env, capture_output=True, timeout=30,
+                       stdin=subprocess.DEVNULL)
         self.assertIn("subclean", self.marks_now())
 
     def test_submodule_audited_as_its_own_repo_safely(self):

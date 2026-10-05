@@ -66,7 +66,7 @@ When the hooks deliver it:
 
 | Harness | Session start | After compaction | Resume |
 |---|---|---|---|
-| Hermes (plugin, `pre_llm_call`) | first turn | first turn after the compaction marker set changes | first turn the process sees |
+| Hermes (plugin, `pre_llm_call`) | first turn | first turn after the compaction marker set changes | first turn the process sees, unless the history already holds a brief since the last compaction (`/resume` or restart) |
 | Claude Code and hook-protocol harnesses (`session-start`) | `startup`, `new`, `clear` | `compact` | `resume` |
 
 Hermes subagents (`platform=subagent`) and cron runs get no brief.
@@ -132,7 +132,7 @@ Lists every tagged entry, grouped by its session. For each session it shows:
 - `--json` emits the same data, including which backend answered for each
   session.
 
-### `inflight trim [--apply]`
+### `inflight trim [--apply] [--dry-run]`
 
 Keeps the brief and the file bounded. Each run takes these steps, in order:
 
@@ -156,8 +156,9 @@ Keeps the brief and the file bounded. Each run takes these steps, in order:
    The newest `INFLIGHT_MIN_ENTRIES` entries that aren't done are never
    archived for budget.
 
-The dry run lists every pause and archive. `--apply` writes the changes. A
-second `--apply` over its own output changes nothing. Flags override the
+The dry run (the default) lists every pause and archive. `--apply` writes the
+changes; `--dry-run` is accepted and wins over `--apply`. A second `--apply`
+over its own output changes nothing. Flags override the
 environment: `--days`, `--stale-days`, `--done-grace-days`, `--max-bytes`,
 `--max-lines`, `--min-entries`.
 

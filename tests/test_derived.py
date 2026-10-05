@@ -411,5 +411,43 @@ class Waiting(unittest.TestCase):
         self.assertEqual(run(self.home, "wait", "nonesuch", "CI")[0], 1)
 
 
+class Consistency(unittest.TestCase):
+    """One source per fact: the active window, entry-id reading, plain labels."""
+
+    def test_active_window_single_source(self):
+        import inspect
+        from agent_inflight import audit, brief, hook, state
+        self.assertEqual(hook.ACTIVE_WINDOW_S, state.ACTIVE_MIN * 60)
+        for fn in (brief.statuses, audit.classify):
+            self.assertEqual(inspect.signature(fn).parameters["active_min"].default, state.ACTIVE_MIN)
+        from agent_inflight import sessions
+        self.assertIn('"--active-min", type=int, default=state.ACTIVE_MIN', inspect.getsource(sessions.main))
+
+    def test_id_normalisation_shared(self):
+        from agent_inflight import core, entries, history
+        e = core.Entry("**2026-10-01 10:00 [session S #abc123] — x.** y")
+        self.assertEqual(entries.match([e], " #ABC123 "), [0])
+        self.assertEqual(len(history.find([history.Found(e, "tracker", True)], " #ABC123 ")), 1)
+
+    def test_label(self):
+        from agent_inflight import core
+        self.assertEqual(core.Entry("**2026-10-01 [session S] — a  b.**  c\nbody").label,
+                         "2026-10-01 [session S] — a b. c")
+
+    def test_trim_accepts_dry_run(self):
+        with tempfile.TemporaryDirectory() as t:
+            home = Path(t)
+            f = home / "inflight.md"
+            f.write_text("## Right now\n\n**2026-01-01 10:00 [session S #aaaaaa] — old.** x\nstatus: done 2026-01-01\n")
+            before = f.read_bytes()
+            rc, out = run(home, "trim", "--dry-run")
+            self.assertEqual(rc, 0, out)
+            self.assertIn("dry run", out)
+            rc, out = run(home, "trim", "--dry-run", "--apply")  # --dry-run wins, as in `audit`
+            self.assertEqual((rc, f.read_bytes()), (0, before), out)
+            rc, out = run(home, "trim", "--apply")
+            self.assertNotEqual(f.read_bytes(), before, out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

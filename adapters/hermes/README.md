@@ -20,7 +20,9 @@
   subprocesses; any error leaves the result unchanged.
   Also `pre_llm_call`: on a session's first turn, the first turn after a
   context compaction (hermes-lcm in-place summaries or the built-in
-  compressor), and the first turn of a resumed session, it injects the
+  compressor), and the first turn the process sees of a resumed or restarted
+  session (skipped when its history already holds a brief since the last
+  compaction), it injects the
   brief into the user turn: this session's open entries in full (tags in its
   compression lineage; never a delegation parent's), one line per other open
   entry, at most 6 KB (see `inflight brief`). Subagents and cron runs get

@@ -12,7 +12,7 @@ transform_tool_result if the file changed, rewrite literal `[session $VAR]`
                       cwd, `workdir`, file `path`) in the session's hook
                       state for `inflight audit`; one write per (session,
                       repo) per minute. If another live session touched that
-                      repo in the last 15 min, appends the collision warning
+                      repo within `state.ACTIVE_MIN` (15 min), appends the collision warning
                       to the result, once per (session, repo). Informs only.
 
 pre_llm_call          on a session's first turn, after a context compaction,

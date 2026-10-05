@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import core, paths, progress
+from . import core, paths, progress, state
 
 BRIEF_MAX_BYTES = 6_000
 HEADLINES_MAX_BYTES = 5_000  # all open entries' headlines; `trim` and `check` hold the file to this
@@ -78,7 +78,7 @@ def headlines_bytes(entries: List[core.Entry]) -> int:
                if progress.lifecycle(e.text).state != "done")
 
 
-def statuses(entries: List[core.Entry], be: Any, active_min: int = 15) -> Dict[str, str]:
+def statuses(entries: List[core.Entry], be: Any, active_min: int = state.ACTIVE_MIN) -> Dict[str, str]:
     """Owner status per session id; empty without a backend."""
     if be is None:
         return {}

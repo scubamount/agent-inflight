@@ -29,7 +29,6 @@ COMPACTION_RE = re.compile(
     r"|\[CONTEXT COMPACTION"                                                     # built-in compressor
     r"|\[CONTEXT SUMMARY\]:")                                                    # legacy prefix
 BRIEF_RE = re.compile(r"\[inflight brief: ")
-_EMPTY = hashlib.sha1().hexdigest()
 
 
 def _texts(content: Any) -> Iterable[str]:

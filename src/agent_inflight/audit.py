@@ -216,7 +216,7 @@ def recorded() -> Dict[str, Dict[str, float]]:
     return out
 
 
-def classify(info: Optional[Dict[str, Any]], stale_min: int, active_min: int = 15) -> str:
+def classify(info: Optional[Dict[str, Any]], stale_min: int, active_min: int = state.ACTIVE_MIN) -> str:
     """ACTIVE / DEAD (ended, or idle past stale_min) / IDLE (too recent to call)."""
     from .sessions import status
     st = status(info, active_min, True)

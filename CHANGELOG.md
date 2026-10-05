@@ -2,6 +2,27 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.2.3
+
+### Fixed
+
+- `inflight trim --dry-run` is accepted (it was rejected as an unknown
+  argument). The dry run stays the default, and `--dry-run` wins over
+  `--apply`, as in `audit`.
+- Docs: the Hermes delivery table and adapter README now say a restart gets
+  no new brief when the history already holds one (true since 1.2.1).
+
+### Changed (no change in output)
+
+- The 15-minute active window has one source, `state.ACTIVE_MIN`. Session
+  status, the brief, `audit` and the collision warning all read it.
+- Entry-id parsing (`core.normalize_id`) and the plain-text head
+  (`Entry.label`) each have one implementation instead of two and six.
+- Removed an unused constant. AGENTS.md lists every module.
+- Tests: raw `git` calls in the audit tests close stdin, as `safe_git`
+  does. A test run with an open stdin pipe (a pipeline, some agent shells)
+  hung on the hostile fixture's filters and left orphaned processes.
+
 ## 1.2.2
 
 ### Fixed

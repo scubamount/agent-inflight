@@ -77,7 +77,7 @@ def load(tracker: Path) -> List[Found]:
 def find(history: List[Found], needle: str) -> List[Found]:
     """An exact entry id wins outright; otherwise a case-insensitive substring
     of the whole entry (head and body)."""
-    n = needle.strip().lstrip("#").lower()
+    n = core.normalize_id(needle)
     by_id = [x for x in history if x.entry.id and x.entry.id == n]
     if by_id:
         return by_id
@@ -95,7 +95,7 @@ def archived_hint(tracker: Path, needle: str) -> str:
 
 
 def _label(x: Found) -> str:
-    head = " ".join(x.entry.head.replace("**", "").split())
+    head = x.entry.label
     state = "archived" if x.where != "tracker" else progress.lifecycle(x.entry.text).state
     return f"{x.where}  {state}  {head[:110]}"
 

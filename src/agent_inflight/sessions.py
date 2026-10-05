@@ -10,7 +10,7 @@ Writers tag the entry head:  **2026-09-30 14:05 [session <id>] — ...**
 `inflight me` prints the tag for the current session.
 
 Status comes from a session backend, never guessed:
-  ACTIVE    last activity < --active-min minutes ago (default 15)
+  ACTIVE    last activity < --active-min minutes ago (default state.ACTIVE_MIN, 15)
   IDLE      no end recorded, quiet longer than that
   ENDED     ended (end reason shown)
   UNKNOWN   backend has no such id (typo, pruned, or another machine)
@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import backends, core, paths, progress
+from . import backends, core, paths, progress, state
 
 
 def backend(root: Optional[Path] = None, plugins: bool = True):
@@ -73,7 +73,7 @@ def collect(text: str, active_min: int, be, with_children: bool = False) -> Dict
         info = be.lookup(sid) if be else None
         p, lc = progress.progress(e.text), progress.lifecycle(e.text)
         rows.append({"session": sid, "id": e.id, "status": status(info, active_min, be is not None),
-                     "this_session": sid == me, "entry": " ".join(e.head.replace("**", "").split())[:110],
+                     "this_session": sid == me, "entry": e.label[:110],
                      "progress": {"done": p.done, "open": p.open, "blocked": p.blocked, "total": p.total},
                      "state": lc.state, **(info or {})})
         if with_children and be is not None and info is not None:
@@ -91,7 +91,7 @@ def me_main() -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="inflight sessions", description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--active-min", type=int, default=15)
+    ap.add_argument("--active-min", type=int, default=state.ACTIVE_MIN)
     ap.add_argument("--file", type=Path, default=None)
     ap.add_argument("--me", action="store_true", help="same as `inflight me`")
     ap.add_argument("--children", action="store_true",

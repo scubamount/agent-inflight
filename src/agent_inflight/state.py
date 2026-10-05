@@ -27,6 +27,12 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from . import paths, safety
 
+# A session is ACTIVE when its last activity is newer than this. One value for
+# `sessions`, the brief, `audit` and the hook collision window, so a session
+# never counts as live for one of them and idle for another. Here because
+# every one of them already imports state (the hook path stays sqlite-free).
+ACTIVE_MIN = 15
+
 SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")  # same charset as core.TAG_RE ids
 
 
