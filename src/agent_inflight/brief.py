@@ -10,7 +10,10 @@ own entries and only needs to know that the others exist. So the brief is:
   2. one line per other open entry: entry id, owner status, date, owner, head,
      and what it is waiting on when its `waiting on:` line is set.
 
-Done entries are left out. The brief is capped at BRIEF_MAX_BYTES. The full
+Done entries are left out. The brief is capped at BRIEF_MAX_BYTES, and no
+open entry is ever dropped from it silently: when the one-line-per-entry
+form does not fit, each owner's older entries fold into an `also open:` list
+of their ids under that owner's newest headline (others_lines). The full
 file stays on disk; `inflight path` names it for when an entry's detail
 matters.
 
@@ -93,6 +96,64 @@ def statuses(entries: List[core.Entry], be: Any, active_min: int = state.ACTIVE_
     return out
 
 
+def _ids_line(group: List[core.Entry]) -> str:
+    parts = [f"#{e.id}" for e in group if e.id]
+    untagged = sum(1 for e in group if not e.id)
+    if untagged:
+        parts.append(f"+{untagged} without id")
+    return " ".join(parts)
+
+
+def _owner_block(owner: str, g: List[core.Entry], folded: bool, status: Dict[str, str]) -> List[str]:
+    if folded and len(g) > 1:
+        return [headline(g[0], status.get(owner)), f"  also open ({len(g) - 1}): {_ids_line(g[1:])}"]
+    return [headline(e, status.get(owner)) for e in g]
+
+
+def others_lines(others: List[core.Entry], status: Dict[str, str], room: int) -> List[str]:
+    """Other sessions' open entries in at most `room` bytes, every one named.
+
+    1. one headline per entry, when that fits;
+    2. else one headline per owner (its newest entry, file order) and the ids
+       of its other open entries on an `also open:` line, owners with the
+       most entries folded first, so a session that piles up entries is the
+       one that loses detail;
+    3. else, if even that is too big, the tail of owners as ids only.
+    `inflight show <id>` prints any entry in full."""
+    full = [headline(e, status.get(e.session or "")) for e in others]
+    if sum(len(ln.encode()) + 1 for ln in full) <= room:
+        return full
+    groups: Dict[str, List[core.Entry]] = {}
+    for e in others:
+        groups.setdefault(e.session or "", []).append(e)
+    folded: set = set()
+
+    def render_all() -> List[str]:
+        return [ln for o, g in groups.items() for ln in _owner_block(o, g, o in folded, status)]
+
+    def size(lines: List[str]) -> int:
+        return sum(len(ln.encode()) + 1 for ln in lines)
+
+    lines = full
+    for owner in sorted((o for o, g in groups.items() if len(g) > 1), key=lambda o: -len(groups[o])):
+        folded.add(owner)
+        lines = render_all()
+        if size(lines) <= room:
+            return lines
+    # Still too big: keep headlines from the top while they fit, then name
+    # the rest by id, so nothing open is left out.
+    out: List[str] = []
+    owners = list(groups.items())
+    for i, (owner, g) in enumerate(owners):
+        later = [e for _, h in owners[i + 1:] for e in h]
+        block = _owner_block(owner, g, owner in folded, status)
+        tail = [f"(and, by id only: {_ids_line(later)})"] if later else []
+        if size(out + block + tail) > room:
+            return out + [f"(and, by id only: {_ids_line(g + later)})"]
+        out += block
+    return out
+
+
 def _fit(block: str, room: int) -> str:
     if len(block.encode()) <= room:
         return block
@@ -129,21 +190,14 @@ def render(mine: List[core.Entry], others: List[core.Entry], sid: str, lineage: 
         shown += 1
     if shown < len(mine):
         n = len(mine) - shown
-        out += [f"({n} more of your entr{'y' if n == 1 else 'ies'} omitted for size; read the tracker file.)", ""]
-        used += 80
+        out += [f"({n} more of your entr{'y' if n == 1 else 'ies'} omitted for size: "
+                f"{_ids_line(mine[shown:])}; `inflight show <id>`.)", ""]
+        used += len(out[-2].encode()) + 2
 
     if lines:
-        out.append("Others (id, owner status, date, owner, head):")
-        used += 48
-        kept = 0
-        for ln in lines:
-            if used + len(ln.encode()) + 1 > max_bytes - 70:
-                break
-            out.append(ln)
-            used += len(ln.encode()) + 1
-            kept += 1
-        if kept < len(lines):
-            out.append(f"({len(lines) - kept} more; `inflight sessions` lists them.)")
+        out.append("Others (id, owner status, date, owner, head; `inflight show <id>` for one in full):")
+        used += 90
+        out += others_lines(others, status, max_bytes - used)
     return "\n".join(out).rstrip()
 
 

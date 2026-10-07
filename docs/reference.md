@@ -63,8 +63,12 @@ deliver:
    have no id.
 
 Done entries are left out. The brief is at most 6,000 bytes, with up to
-3,000 kept for the headlines when your own entries are long; what doesn't fit
-is cut with a pointer to the file. With nothing open it prints `nothing open`
+3,000 kept for the headlines when your own entries are long. No open entry
+is dropped from it: when one line per entry does not fit, the owner with the
+most open entries is folded first, to its newest headline plus an
+`also open (N): #id #id ...` line, then the next, and as a last resort the
+remaining entries are named by id only. Your own entries that don't fit are
+named by id too. `inflight show <id>` prints any of them in full. With nothing open it prints `nothing open`
 (the hooks print nothing).
 
 When the hooks deliver it:
@@ -243,7 +247,14 @@ its own section, never written to the tracker.
 - When the session owes nothing in the repo any more (clean, or all of the
   work is attributed to other sessions), the entry is marked done, never
   deleted.
-- Repos that an ACTIVE session recorded are skipped.
+- Repos that an ACTIVE session recorded get no new entry. A repo that already
+  has an open audit entry is re-checked on every run anyway, so the entry
+  never goes on claiming work that has since been committed or pushed: it is
+  closed when everything it lists is gone, and trimmed to what is left
+  otherwise. Work still in the repo that can no longer be pinned on the
+  entry's session (another session worked there since) stays listed, marked
+  `(still in the repo; maker not provable)`. Only the `- [ ]` lines change;
+  the head, `waiting on:`, `(took over ...)` and notes are kept.
 - Scan-root repos that no session recorded are listed as **unowned** and never
   written to the tracker.
 

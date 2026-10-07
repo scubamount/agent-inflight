@@ -77,11 +77,25 @@ def render_for(harness: Optional[str], event: str, text: str) -> str:
                                               "additionalContext": text[:9000]}})
 
 
+def _edited(d: Dict[str, Any], repo: str) -> bool:
+    """The session behind state `d` may have changed files in `repo`. A Hermes
+    session records every file its write tools wrote, so one with none
+    under `repo` has only read there (shell edits are the gap; audit has the
+    same one). Other harnesses record only on edit-capable tools (Claude
+    Code's matcher is Edit|Write|NotebookEdit|Bash), so they always count."""
+    if d.get("harness") != "hermes":
+        return True
+    pre = repo.rstrip("/") + "/"
+    return any(isinstance(p, str) and p.startswith(pre) for p in (d.get("writes") or {}))
+
+
 def _collisions(sid: str, repo: str) -> List[str]:
-    """Other sessions that touched `repo` in the last ACTIVE_WINDOW_S and have
-    not ended. A Hermes session's end lives in state.db, not in its hook state
-    file, so a state file with no `ended_at` is checked against the built-in
-    backends (no plugins: this runs inside a hook or the Hermes process)."""
+    """Other sessions that edited in `repo` in the last ACTIVE_WINDOW_S and
+    have not ended (_edited: a Hermes session that only read there is not a
+    collision). A Hermes session's end lives in state.db, not in its hook
+    state file, so a state file with no `ended_at` is checked against the
+    built-in backends (no plugins: this runs inside a hook or the Hermes
+    process)."""
     from . import backends
     out: List[str] = []
     be: Optional[backends.Chain] = None
@@ -92,6 +106,8 @@ def _collisions(sid: str, repo: str) -> List[str]:
             continue
         if repo not in {paths.canonical(r) for r in (d.get("repos") or {})}:
             continue  # recorded spellings from before 1.2.1 may differ in case
+        if not _edited(d, repo):
+            continue
         if d.get("harness") == "hermes":
             if not looked:
                 be, looked = backends.chain(plugins=False), True

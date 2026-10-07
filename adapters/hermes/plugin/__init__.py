@@ -13,9 +13,13 @@ transform_tool_result if the file changed, rewrite literal `[session $VAR]`
                       state for `inflight audit`; one write per (session,
                       repo) per minute. For `write_file` / `patch` it also
                       records the files written, so audit attributes a dirty
-                      file to the session that wrote it. If another live session touched that
-                      repo within `state.ACTIVE_MIN` (15 min), appends the collision warning
-                      to the result, once per (session, repo). Informs only.
+                      file to the session that wrote it. On a call that can
+                      change files (write_file, patch, terminal,
+                      execute_code), if another live session outside this
+                      one's family edited in that repo within
+                      `state.ACTIVE_MIN` (15 min), appends the collision
+                      warning to the result, once per (session, repo).
+                      Informs only.
 
 pre_llm_call          on a session's first turn, after a context compaction,
                       and on a resumed session, inject the brief (brief.py)
@@ -54,6 +58,10 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_TTL_S = 600  # a call whose result never arrives (tool raised) is forgotten after this
 _EDIT_TOOLS = {"write_file": ("content",), "patch": ("new_string", "patch")}
+# Tools that can change files: the only ones a collision warning is worth
+# interrupting. A read (read_file, search_files, web_*, skill_view) in a
+# repo another session is editing changes nothing, so it gets no warning.
+_MUTATING_TOOLS = frozenset(_EDIT_TOOLS) | {"terminal", "execute_code"}
 _SHELL_TOOLS = {"terminal": "command", "execute_code": "code"}
 
 
@@ -279,6 +287,8 @@ def record_repos(session_id: str, task_id: str, args: Any, tool_name: str = "",
                 _recorded.clear()
             _recorded[key] = now
         state.update(session_id, repo=repo, harness="hermes")
+        if tool_name not in _MUTATING_TOOLS:
+            continue
         w = hook.collision_warning(session_id, repo, "hermes-tool")
         if w:
             warnings.append(w)

@@ -680,6 +680,46 @@ class Apply(World):
         c = audit.apply(audit.build(), self.tracker)
         self.assertEqual(c["done"], 0)  # idempotent
 
+    def test_open_entry_rechecked_while_repo_is_in_use(self):
+        """An active session in the repo used to freeze the entry; it went on
+        claiming work that had been committed and pushed."""
+        audit.apply(audit.build(), self.tracker)
+        self.session("live-1", [self.r])  # a live session now works in the repo
+        git(self.r, "add", "-A")
+        git(self.r, "commit", "-qm", "commit the dead session's work")
+        git(self.r, "push", "-q")
+        plan = audit.build(tracked=audit.tracked_repos(self.tracker))
+        self.assertIn(paths.canonical(str(self.r)), plan.checked)
+        c = audit.apply(plan, self.tracker)
+        self.assertEqual(c["done"], 1)
+        self.assertEqual(progress.lifecycle(self.entries()[0].text).state, "done")
+
+    def test_recheck_never_adds_an_entry_while_repo_is_in_use(self):
+        r = mkrepo(self.code / "busy", self.remote)
+        (r / "b.txt").write_text("dead session's\n")
+        self.session("dead-3", [r], ended=True, idle_s=3 * 3600)  # its hour holds b.txt
+        self.session("live-1", [r])
+        plan = audit.build(tracked={paths.canonical(str(r))})  # re-checked, e.g. another entry is open there
+        self.assertIn(paths.canonical(str(r)), plan.checked)
+        audit.apply(plan, self.tracker)  # setUp's dead-1 repo is not in use: that one is added
+        self.assertNotIn("[session dead-3 #", self.tracker.read_text(), "a repo in use gets no new entry")
+
+    def test_recheck_keeps_unprovable_work_marked_and_hand_lines(self):
+        audit.apply(audit.build(), self.tracker)
+        e = self.entries()[0]
+        text = self.tracker.read_text().replace(e.text, e.text + "\nwaiting on: Andrew decides\n(took over x-1)")
+        self.tracker.write_text(text)
+        self.session("live-1", [self.r])  # now two sessions span the file's hour: not provable
+        c = audit.apply(audit.build(tracked=audit.tracked_repos(self.tracker)), self.tracker)
+        self.assertEqual(c["updated"], 1)
+        t = self.entries()[0].text
+        self.assertIn("- [ ] uncommitted: 1 modified" + audit.UNPROVEN, t)
+        self.assertIn("waiting on: Andrew decides", t)
+        self.assertIn("(took over x-1)", t)
+        self.assertEqual(self.entries()[0].head, e.head)  # date and id unchanged
+        c = audit.apply(audit.build(tracked=audit.tracked_repos(self.tracker)), self.tracker)
+        self.assertEqual((c["updated"], c["done"]), (0, 0))  # stable
+
     def test_entry_says_idle_not_ended(self):
         r = mkrepo(self.code / "idle", self.remote)
         (r / "a.txt").write_text("x\n")

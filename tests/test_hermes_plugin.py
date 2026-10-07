@@ -270,7 +270,24 @@ class Reinject(TmpHome):
         self.assertLessEqual(len(out.encode()), brief.BRIEF_MAX_BYTES)
         self.assertIn("omitted for size", out)
         self.assertIn("other 0", out)                    # headlines keep their reserved room
-        self.assertIn("more; `inflight sessions` lists them.", out)
+        for i in range(60):                              # past the cap, every other entry is still named
+            self.assertIn(f"#{i:06x}", out)
+
+    def test_brief_folds_a_piled_up_owner_first(self):
+        from agent_inflight import brief
+        pile = [core.Entry(f"**2026-09-29 10:00 [session PILE #{i:06x}] — release step {i}: " + "p" * 90 + ".**")
+                for i in range(60)]
+        few = [core.Entry(f"**2026-09-28 10:00 [session F{i} #{0xf00 + i:06x}] — other work {i}: " + "q" * 90 + ".**")
+               for i in range(10)]
+        out = brief.render([], pile + few, "ME", ["ME"], "session start")
+        self.assertLessEqual(len(out.encode()), brief.BRIEF_MAX_BYTES)
+        self.assertIn("release step 0", out)             # the owner's newest keeps its headline
+        self.assertNotIn("release step 1:", out)
+        self.assertIn("also open (59): #000001", out)
+        for i in range(10):                              # owners with one entry keep theirs
+            self.assertIn(f"other work {i}", out)
+        for i in range(60):
+            self.assertIn(f"#{i:06x}", out)
 
     def test_signature_for_builtin_compressor(self):
         from agent_inflight import reinject
@@ -424,18 +441,40 @@ class HermesCollision(CallDirs):
                         ("GRANDKID", "t", now - 30, None, None, now, "KID"),
                         ("STRANGER", "t", now - 60, None, None, now, None)])
         for sid in ("ROOT", "KID"):
-            self.state.update(sid, repo=str(self.sess.resolve()), harness="hermes")
+            self.state.update(sid, repo=str(self.sess.resolve()), harness="hermes",
+                              writes=[str(self.sess.resolve() / "a.py")])
         self.assertIsNone(self.run_tool(sid="GRANDKID"), "parent and grandparent are the same work")
         self.p._recorded.clear()
         out = self.run_tool(sid="STRANGER", tcid="t12")
         self.assertIn("another active session (", out or "")
         self.assertIn("ROOT", out or "")
 
+    def test_no_warning_about_a_session_that_only_read_there(self):
+        self.state.update("cc-live", ended_at=time.time(), end_reason="clear")
+        now = time.time()
+        _db(self.home, [("READER", "t", now - 60, None, None, now, None),
+                        ("ME", "t", now - 60, None, None, now, None)])
+        self.state.update("READER", repo=str(self.sess.resolve()), harness="hermes",
+                          writes=[str(self.home / "elsewhere" / "x.py")])
+        self.assertIsNone(self.run_tool(sid="ME"), "a Hermes session with no writes in the repo only read there")
+        self.state.update("READER", writes=[str(self.sess.resolve() / "y.py")])
+        self.p._recorded.clear()
+        self.assertIn("READER", self.run_tool(sid="ME", tcid="t13") or "")
+
+    def test_read_only_tool_gets_no_warning(self):
+        args = {"path": str(self.sess / "x.txt")}
+        out = self.p.on_transform_tool_result(tool_name="read_file", args=args, result="{}",
+                                              session_id="H3", tool_call_id="t14", task_id="task-1")
+        self.assertIsNone(out, "a read changes nothing; it is not worth a warning")
+        self.p._recorded.clear()
+        self.assertIn("cc-live", self.run_tool(tcid="t15") or "", "the first edit still warns")
+
     def test_ended_hermes_session_from_state_db_does_not_warn(self):
         # A Hermes session's hook state never gets `ended_at`; its end is in
         # state.db. An ended one-shot that touched the repo is not live.
         self.state.update("cc-live", ended_at=time.time(), end_reason="clear")
-        self.state.update("H-old", repo=str(self.sess.resolve()), harness="hermes")
+        self.state.update("H-old", repo=str(self.sess.resolve()), harness="hermes",
+                          writes=[str(self.sess.resolve() / "a.py")])
         con = sqlite3.connect(self.home / "state.db")
         con.execute("create table sessions (id text, title text, started_at real, ended_at real, "
                     "end_reason text, last_activity_at real, parent_session_id text)")

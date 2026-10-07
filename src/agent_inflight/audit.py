@@ -457,6 +457,7 @@ class Plan:
     noted: List[RepoState] = field(default_factory=list)                     # clean, with notes
     merged_repos: List[RepoState] = field(default_factory=list)              # any branch already on default
     ignored: List[str] = field(default_factory=list)                         # repos matching audit.ignore_repos
+    checked: Dict[str, Tuple[Dict[str, RepoState], RepoState]] = field(default_factory=dict)  # repo -> attribute()
 
     def as_dict(self) -> Dict[str, Any]:
         def facts(r: RepoState) -> Dict[str, Any]:
@@ -489,7 +490,12 @@ def _sess(sid: str, info: Dict[str, Any], rec: Recorded) -> Sess:
 
 
 def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional[float] = None,
-          be: Any = None) -> Plan:
+          be: Any = None, tracked: Optional[set] = None) -> Plan:
+    """`tracked`: repos with an open audit entry. They are re-inspected even
+    while a recorder is live, so an entry never goes on claiming work that
+    has since been pushed or committed; for them audit only updates or
+    closes the existing entry, never adds one (plan.checked, apply())."""
+    tracked = tracked or set()
     from . import backends
     be = backends.chain() if be is None else (be or None)
     rec = recorded()
@@ -505,7 +511,7 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
             recorders.setdefault(repo, []).append(sid)
     for repo, sids in recorders.items():
         sids.sort(key=lambda s: rec[s].repos[repo], reverse=True)
-    candidates = list(dict.fromkeys(list(recorders) + ([paths.canonical(str(p)) for r, d in roots()
+    candidates = list(dict.fromkeys(sorted(tracked) + list(recorders) + ([paths.canonical(str(p)) for r, d in roots()
                                                          for p in scan(r, d)] if use_roots else [])))
     plan = Plan()
     ignored = ignore_repos()
@@ -519,12 +525,15 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
             continue
         sids = recorders.get(repo, [])
         live = [s for s in sids if status_of[s] == "ACTIVE"]
-        if live:
-            plan.in_use.append((repo, live[0]))
-            continue
-        if not use_roots and sids and not any(status_of[s] == "DEAD" for s in sids):
-            plan.pending.append((repo, sids[0]))  # catch-up: don't spend git calls on live recorders
-            continue
+        recheck_only = False
+        if live or (not use_roots and sids and not any(status_of[s] == "DEAD" for s in sids)):
+            if repo not in tracked:
+                if live:
+                    plan.in_use.append((repo, live[0]))
+                else:
+                    plan.pending.append((repo, sids[0]))  # catch-up: don't spend git calls on live recorders
+                continue
+            recheck_only = True  # an open entry here: verify it, never add one
         if not Path(repo).is_dir():
             continue
         rs = inspect(repo)
@@ -542,6 +551,7 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
                 plan.clean += 1
             continue
         owned, rest = attribute(rs, [_sess(s, info_of[s], rec[s]) for s in sids])
+        plan.checked[repo] = (owned, rest)
         if not rs.owed:
             plan.clean += 1
         if rest.owed:
@@ -553,6 +563,8 @@ def build(stale_min: int = STALE_MIN, use_roots: bool = True, deadline: Optional
         for sid, share in owned.items():
             if repo in plan.owing:
                 plan.owing[repo].append(sid)
+            if recheck_only:
+                continue
             if status_of[sid] == "DEAD":
                 plan.catch_up.append((sid, share, why_dead(info_of.get(sid) or {})))
             else:
@@ -607,6 +619,62 @@ def _repo_of(e: core.Entry) -> Optional[str]:
     return paths.canonical(m.group(1).strip()) if m else None
 
 
+def _with_findings(old: str, findings: List[str]) -> str:
+    """`old` with its `- [ ]` finding lines replaced by `findings`, in place.
+    Everything else (head and its date, provenance line, notes, `waiting on:`,
+    `(took over ...)`, status) is kept as written."""
+    lines = old.split("\n")
+    idx = [i for i, ln in progress.body_lines(old) if ln.strip().startswith("- [ ] ")]
+    if not idx:
+        return old
+    new = [f"- [ ] {f}" for f in findings]
+    return "\n".join(lines[:idx[0]] + new + [ln for i, ln in enumerate(lines) if i > idx[0] and i not in idx])
+
+
+def tracked_repos(path: Path) -> set:
+    """Repos with an open audit entry: what build() re-checks even when live."""
+    try:
+        rn = core.right_now(core.parse(path.read_text(encoding="utf-8")))
+    except OSError:
+        return set()
+    out = set()
+    for e in (rn.entries if rn else []):
+        r = _repo_of(e)
+        if r and progress.lifecycle(e.text).state != "done":
+            out.add(r)
+    return out
+
+
+UNPROVEN = " (still in the repo; maker not provable)"
+_BRANCH_RE = re.compile(r"^\d+ unpushed commit\(s\) on (\S+)")
+
+
+def still_owed(old: List[str], share: Optional[RepoState], rest: RepoState) -> List[str]:
+    """What an open audit entry's findings are now. Its session's own share,
+    plus each old finding that is still in the repo but no longer provably
+    its session's (kept, marked UNPROVEN, so nothing is lost). Gone from the
+    repo = dropped; empty = the entry is resolved."""
+    now = list(share.findings) if share else []
+    def has(prefix: str) -> bool:
+        return any(f.startswith(prefix) for f in now)
+    for f in old:
+        base = f[:-len(UNPROVEN)] if f.endswith(UNPROVEN) else f
+        if base in now:
+            continue
+        if base.startswith("uncommitted:") and rest.dirty and not has("uncommitted:"):
+            now.append(RepoState(rest.repo, dirty=rest.dirty).findings[0] + UNPROVEN)
+        elif base.endswith(("stash entry", "stash entries")) and rest.stashes \
+                and not any(x.endswith(("stash entry", "stash entries")) for x in now):
+            now.append(RepoState(rest.repo, stashes=rest.stashes).findings[0] + UNPROVEN)
+        else:
+            m = _BRANCH_RE.match(base)
+            branch = m.group(1) if m else None
+            for b in rest.unpushed:
+                if b[0] == branch:
+                    now.append(RepoState(rest.repo, unpushed=[b]).findings[0] + UNPROVEN)
+    return list(dict.fromkeys(now))
+
+
 def _findings_of(text: str) -> List[str]:
     return [ln.strip()[6:] for _, ln in progress.body_lines(text) if ln.strip().startswith("- [ ] ")]
 
@@ -649,6 +717,23 @@ def apply(plan: Plan, path: Path, today: Optional[date] = None) -> Dict[str, int
                 counts["updated"] += 1
                 changed = True
             kept.add(id(cur))
+        for e, repo in mine:
+            # verify every other open audit entry against the repo as it is now
+            if id(e) in kept or repo not in plan.checked or progress.lifecycle(e.text).state == "done":
+                continue
+            owned, rest = plan.checked[repo]
+            now = still_owed(_findings_of(e.text), owned.get(e.session or ""), rest)
+            kept.add(id(e))
+            if not now:
+                e.text = progress.set_status(e.text, "done", today)
+                counts["done"] += 1
+                changed = True
+            elif now != _findings_of(e.text):
+                new = _with_findings(e.text, now)
+                if not safety.body_problems(new.split("\n", 1)[1]):
+                    e.text = new
+                    counts["updated"] += 1
+                    changed = True
         for e, repo in mine:
             # close: the repo was inspected and this entry's session owes
             # nothing there now (clean, or the work is another session's)
@@ -711,11 +796,12 @@ def catch_up(budget_s: float = 3.0, min_interval_s: float = 600.0) -> Optional[D
         from . import backends
         # built-in backends only: this runs inside `inflight hook`, which never imports plugins.
         # A session only a plugin knows is UNKNOWN here, so it is never written.
-        plan = build(use_roots=False, deadline=time.monotonic() + budget_s,
-                     be=backends.chain(plugins=False) or False)
         path = paths.inflight_file().expanduser()
-        if not plan.catch_up and not _closable(plan, path):  # nothing to write: skip the lock
-            return {}
+        tracked = tracked_repos(path)
+        plan = build(use_roots=False, deadline=time.monotonic() + budget_s,
+                     be=backends.chain(plugins=False) or False, tracked=tracked)
+        if not plan.catch_up and not (plan.checked.keys() & tracked) and not _closable(plan, path):
+            return {}  # nothing to write: skip the lock
         return apply(plan, path)
     except Exception as e:  # catch-up must never break a hook or the cron
         state.log("audit-error", event="catch-up", error=type(e).__name__)
@@ -795,11 +881,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
     if args.dry_run:
         args.apply = False
-    plan = build(args.stale_min, use_roots=not args.catch_up)
+    path = (args.file or paths.inflight_file()).expanduser()
+    plan = build(args.stale_min, use_roots=not args.catch_up, tracked=tracked_repos(path))
     counts = None
     if args.apply:
         try:
-            counts = apply(plan, (args.file or paths.inflight_file()).expanduser())
+            counts = apply(plan, path)
         except safety.LockTimeout as e:
             print(f"REFUSED: {e}; re-run", file=sys.stderr)
             return 3

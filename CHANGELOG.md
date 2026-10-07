@@ -2,7 +2,28 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 1.5.0
+## 1.6.0
+
+### Fixed
+
+- The brief no longer leaves out open entries. When the one-line list did
+  not fit, the tail was cut to `(N more; ...)`: on the audited machine 11 of
+  38 open entries were not in any session's brief. Now the owner with the
+  most open entries folds first, to its newest headline plus
+  `also open (N): #id ...`, and as a last resort entries are named by id.
+  Every open entry is named in every brief, still within 6,000 bytes.
+- Audit entries no longer go stale while their repo is in use. A repo with
+  an ACTIVE recorder used to be skipped, so its open audit entry kept
+  claiming work that had been committed or pushed (one listed 16 stashes
+  when 1 was left). Open entries are now re-checked on every run: closed when
+  their work is gone, trimmed when part of it is. Work that can no longer be
+  pinned on the entry's session stays listed and marked; hand-added lines
+  are kept. The re-check never adds an entry for a repo in use.
+- Collision warnings: no warning about a Hermes session that wrote no file
+  in the repo (it only read there), and the Hermes plugin warns only on tools
+  that can change files. Replaying the 126 warnings in this machine's
+  state.db through the new rules leaves 4.
+
 
 Fixes from a usage audit of one machine (5 days, 17 sessions).
 
