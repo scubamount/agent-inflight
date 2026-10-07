@@ -132,6 +132,21 @@ class HermesBackend:
             chain.insert(0, row[0][0])
         return chain
 
+    def family_root(self, sid: str, max_hops: int = 50) -> str:
+        """The top of `sid`'s parent chain, through delegation and compression
+        parents alike. A subagent and the session that spawned it share a
+        root, so one is never warned about the other."""
+        info = self._one(sid)
+        if not info:
+            return sid
+        seen = [sid]
+        while len(seen) < max_hops:
+            row = self._rows(info["_db"], "select parent_session_id from sessions where id = ?", (seen[-1],))
+            if not row or not row[0][0] or row[0][0] in seen:
+                break
+            seen.append(row[0][0])
+        return seen[-1]
+
     def children(self, sid: str, limit: int = 50) -> List[dict]:
         """Delegation children of `sid` and of every compression continuation
         after it (the same conversation), newest first. Read-only."""
@@ -242,6 +257,9 @@ class Chain:
 
     def children(self, sid: str) -> List[dict]:
         return self._call(sid, "children", [])
+
+    def family_root(self, sid: str) -> str:
+        return self._call(sid, "family_root", sid) or sid
 
     def drill(self, sid: str, profile: str) -> List[str]:
         return self._call(sid, "drill", [], profile)

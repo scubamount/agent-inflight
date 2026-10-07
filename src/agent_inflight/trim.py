@@ -16,12 +16,15 @@ progress.py): active (default), paused, done.
              newer of its head date and its session's last activity, so a
              session still at work keeps its entry active.
   2. done:   DONE entries older than --done-grace-days are archived.
+     paused: entries paused longer than --paused-days, whose session has
+             not been active since, are archived (0 turns this off).
   3. budget: while the headlines are over the brief's budget, or the file
              is over --max-bytes or --max-lines, archive in this order:
              done (oldest first), then paused (longest-paused first), then
              active (oldest first). The newest --min-entries entries that
              are not done are never archived for budget.
-  Active entries are NEVER archived by age; age alone only pauses them.
+  Active entries are NEVER archived by age; age alone only pauses them, and
+  a paused entry is archived only after --paused-days more.
   An entry started before 0.2.0 has no status and counts as active.
 
 Other sections: kept when their header (or first 400 chars) carries a date
@@ -52,6 +55,7 @@ DEFAULT_MAX_LINES = 200
 DEFAULT_MIN_ENTRIES = 3
 DEFAULT_STALE_DAYS = 3
 DEFAULT_DONE_GRACE_DAYS = 1
+DEFAULT_PAUSED_DAYS = 7
 
 
 @dataclass
@@ -72,10 +76,11 @@ def _order(e: "core.Entry", i: int):
 
 def plan(text: str, today: date, days: int, max_bytes: int, max_lines: int, min_entries: int, *,
          stale_days: int = DEFAULT_STALE_DAYS, done_grace_days: int = DEFAULT_DONE_GRACE_DAYS,
-         activity: Optional[Dict[str, float]] = None) -> Plan:
+         paused_days: int = DEFAULT_PAUSED_DAYS, activity: Optional[Dict[str, float]] = None) -> Plan:
     """Pure function; no I/O. `activity` maps session id -> last activity (epoch s)."""
     cutoff = today - timedelta(days=days)
     done_cutoff = today - timedelta(days=done_grace_days)
+    paused_cutoff = today - timedelta(days=paused_days)
     activity = activity or {}
     sections = core.parse(text)
     out = Plan(text)
@@ -91,6 +96,11 @@ def plan(text: str, today: date, days: int, max_bytes: int, max_lines: int, min_
                 if lc.state == "done":
                     if (lc.since or e.date or date.min) < done_cutoff:
                         out.archived.append(e.text)
+                        continue
+                elif lc.state == "paused":
+                    touched = progress.last_touched(e.date, activity.get(e.session or ""))
+                    if paused_days > 0 and lc.since and lc.since < paused_cutoff and (touched or date.min) < paused_cutoff:
+                        out.archived.append(e.text)  # paused this long is abandoned; `inflight log` finds it
                         continue
                 elif lc.state == "active":
                     touched = progress.last_touched(e.date, activity.get(e.session or ""))
@@ -158,6 +168,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--max-lines", type=int, default=paths.env_int("INFLIGHT_MAX_LINES", DEFAULT_MAX_LINES))
     ap.add_argument("--min-entries", type=int, default=paths.env_int("INFLIGHT_MIN_ENTRIES", DEFAULT_MIN_ENTRIES))
     ap.add_argument("--stale-days", type=int, default=paths.env_int("INFLIGHT_STALE_DAYS", DEFAULT_STALE_DAYS))
+    ap.add_argument("--paused-days", type=int, default=paths.env_int("INFLIGHT_PAUSED_DAYS", DEFAULT_PAUSED_DAYS),
+                    help=f"archive entries paused longer than this (default {DEFAULT_PAUSED_DAYS}; 0 = never)")
     ap.add_argument("--done-grace-days", type=int,
                     default=paths.env_int("INFLIGHT_DONE_GRACE_DAYS", DEFAULT_DONE_GRACE_DAYS))
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
@@ -178,7 +190,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     today = date.fromisoformat(args.today) if args.today else date.today()
     p = plan(original, today, args.days, args.max_bytes, args.max_lines, args.min_entries,
              stale_days=args.stale_days, done_grace_days=args.done_grace_days,
-             activity=session_activity(original))
+             paused_days=args.paused_days, activity=session_activity(original))
     new_text, archived = p.text, p.archived
 
     before_b, after_b = len(original.encode()), len(new_text.encode())

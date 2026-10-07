@@ -41,6 +41,9 @@ def add_main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--session", default=None, help="override the session id")
     ap.add_argument("--force", action="store_true",
                     help="write even if the text looks like a credential (false positive)")
+    ap.add_argument("--supersedes", action="append", default=[], metavar="ID",
+                    help="this session's open entry that the new one replaces: marked done in the same "
+                         "write (repeatable). Update state this way instead of piling up entries.")
     args = ap.parse_args(argv)
 
     headline = args.headline
@@ -68,6 +71,10 @@ def add_main(argv: Optional[List[str]] = None) -> int:
         init_main(["--file", str(path)])
     sid = args.session if args.session is not None else paths.session_id()
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    old_ids = [core.normalize_id(x) for x in args.supersedes]
+    if old_ids and not sid:
+        print("REFUSED: --supersedes needs a session id (it only closes this session's own entries)", file=sys.stderr)
+        return 4
 
     from . import history
     archived_ids = history.ids(path)
@@ -88,6 +95,17 @@ def add_main(argv: Optional[List[str]] = None) -> int:
                     rn = core.Section(core.RIGHT_NOW)
                     idx = 1 if sections and sections[0].header == "" else 0
                     sections.insert(idx, rn)
+                for oid in old_ids:
+                    hit = [i for i, e in enumerate(rn.entries) if e.id == oid]
+                    if not hit or rn.entries[hit[0]].session != sid:
+                        print(f"REFUSED: --supersedes {oid}: no open entry of this session ({sid}) has that id; "
+                              "nothing written", file=sys.stderr)
+                        return 1
+                    if progress.lifecycle(rn.entries[hit[0]].text).state == "done":
+                        continue
+                    lines = progress.set_status(rn.entries[hit[0]].text, "done", date.today()).split("\n")
+                    lines.insert(len(lines) - 1, f"superseded by #{eid}")  # just above the status line
+                    rn.entries[hit[0]] = core.Entry("\n".join(lines))
                 rn.entries.insert(0, entry)
                 now = path.stat()
                 if (now.st_mtime_ns, now.st_size) == (before.st_mtime_ns, before.st_size):

@@ -416,6 +416,21 @@ class HermesCollision(CallDirs):
     def test_no_warning_for_own_session(self):
         self.assertIsNone(self.run_tool(sid="cc-live"))
 
+    def test_no_warning_between_a_session_and_its_own_subagents(self):
+        self.state.update("cc-live", ended_at=time.time(), end_reason="clear")
+        now = time.time()
+        _db(self.home, [("ROOT", "t", now - 600, None, None, now, None),
+                        ("KID", "t", now - 60, None, None, now, "ROOT"),
+                        ("GRANDKID", "t", now - 30, None, None, now, "KID"),
+                        ("STRANGER", "t", now - 60, None, None, now, None)])
+        for sid in ("ROOT", "KID"):
+            self.state.update(sid, repo=str(self.sess.resolve()), harness="hermes")
+        self.assertIsNone(self.run_tool(sid="GRANDKID"), "parent and grandparent are the same work")
+        self.p._recorded.clear()
+        out = self.run_tool(sid="STRANGER", tcid="t12")
+        self.assertIn("another active session (", out or "")
+        self.assertIn("ROOT", out or "")
+
     def test_ended_hermes_session_from_state_db_does_not_warn(self):
         # A Hermes session's hook state never gets `ended_at`; its end is in
         # state.db. An ended one-shot that touched the repo is not live.

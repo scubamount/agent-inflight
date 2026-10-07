@@ -191,6 +191,52 @@ def _already_on(g: Any, default: Optional[str], branch: str) -> bool:
     return out == "0"
 
 
+SQUASH_SCAN_MAX = 500  # default-branch commits searched for a squash twin
+
+
+def _raw_changes(raw: str) -> List[Tuple[str, ...]]:
+    """(new mode, new blob, status, path) per line of `diff-tree -r` raw output.
+    The old side is left out: the default branch may have moved the same file
+    on before the squash landed."""
+    out = []
+    for line in raw.splitlines():
+        if line.startswith(":") and "\t" in line:
+            meta, path = line.split("\t", 1)
+            f = meta.split()
+            if len(f) >= 5:
+                out.append((f[1], f[3], f[4], path))
+    return sorted(out)
+
+
+def _squash_merged(g: Any, default: Optional[str], branch: str) -> bool:
+    """True when one commit on `default` since the merge base makes exactly
+    the branch's net change (same paths, same resulting blobs): the branch
+    was squash-merged and nothing was added to it after. Any git error,
+    timeout, empty diff or a range over SQUASH_SCAN_MAX -> False (keep it
+    as unpushed: never hide work on a failed check)."""
+    if not default:
+        return False
+    try:
+        base = g("merge-base", default, f"refs/heads/{branch}").strip()
+        want = _raw_changes(g("diff-tree", "-r", "--no-renames", base, f"refs/heads/{branch}"))
+        if not base or not want:
+            return False
+        n = g("rev-list", "--count", "--no-merges", f"{base}..{default}").strip()
+        if not n.isdigit() or not 0 < int(n) <= SQUASH_SCAN_MAX:
+            return False
+        raw = g("log", "--no-merges", "--raw", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv",
+                "--format=%H", f"{base}..{default}")
+    except GitError:
+        return False
+    blocks: List[List[str]] = []  # `log --raw` prints each commit id, then its changes
+    for line in raw.splitlines():
+        if not line.startswith(":"):
+            blocks.append([])
+        elif blocks:
+            blocks[-1].append(line)
+    return any(_raw_changes("\n".join(b)) == want for b in blocks)
+
+
 def _status_paths(raw: str) -> List[Tuple[str, str]]:
     """(repo-relative path, "modified" | "untracked") from `status --porcelain=v1 -z`.
     A rename or copy is one entry; its source path (the next field) is skipped."""
@@ -257,7 +303,7 @@ def inspect(repo: str, timeout: float = 5.0) -> RepoState:
                 # Unpushed = on NO remote-tracking ref. Ahead-of-upstream alone overcounts
                 # when the upstream ref is stale but the commits are on another remote.
                 n = g("rev-list", "--count", f"refs/heads/{name}", "--not", "--remotes").strip()
-                if n and n != "0" and _already_on(g, default, name):
+                if n and n != "0" and (_already_on(g, default, name) or _squash_merged(g, default, name)):
                     rs.merged.append((_redact(name), n, (default or "").replace("refs/remotes/", "")))
                 elif n and n != "0":
                     rs.unpushed.append((_redact(name), n, float(tip) if tip.isdigit() else None, bool(upstream)))

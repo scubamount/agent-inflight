@@ -195,6 +195,39 @@ class DoneAndTrim(unittest.TestCase):
         self.assertIn("would mark done", out)
         self.assertEqual(self.f.read_text().count("status: done"), 1)
 
+    def test_add_supersedes_closes_own_entry_in_one_write(self):
+        rc, out = run(self.home, "add", "foo: pushed", "--supersedes", "#aaaaaa", sid="S")
+        self.assertEqual(rc, 0, out)
+        t = self.f.read_text()
+        new_id = t.split("[session S #", 1)[1][:6]
+        old = t[t.index("#aaaaaa]"):t.index("#bbbbbb]")]
+        self.assertIn(f"superseded by #{new_id}\nstatus: done ", old)
+        self.assertEqual(pg.lifecycle(old).state, "done")
+        self.assertIn("- [x] a", old)  # body kept, never deleted
+
+    def test_add_supersedes_refuses_other_sessions_entry_and_writes_nothing(self):
+        before = self.f.read_text()
+        rc, out = run(self.home, "add", "steal", "--supersedes", "cccccc", sid="S")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no open entry of this session", out)
+        self.assertEqual(self.f.read_text(), before)
+        rc, out = run(self.home, "add", "untagged", "--supersedes", "aaaaaa", sid="")
+        self.assertEqual(rc, 4, out)
+        self.assertEqual(self.f.read_text(), before)
+
+    def test_trim_archives_long_paused_only(self):
+        from agent_inflight import trim
+        text = ("## Right now\n\n"
+                "**2026-09-01 10:00 [session S #aaaaaa] — long paused.** x\nstatus: paused (stale since 2026-09-05)\n\n"
+                "**2026-09-20 10:00 [session S #bbbbbb] — recently paused.** y\nstatus: paused (stale since 2026-09-27)\n\n"
+                "**2026-09-01 10:00 [session T #cccccc] — paused, owner back.** z\nstatus: paused (stale since 2026-09-05)\n")
+        p = trim.plan(text, date(2026, 9, 30), 7, 10**9, 10**9, 0, activity={"T": time.time()})
+        self.assertEqual([a.split(" — ")[1][:11] for a in p.archived], ["long paused"])
+        self.assertIn("recently paused", p.text)
+        self.assertIn("paused, owner back", p.text)
+        off = trim.plan(text, date(2026, 9, 30), 7, 10**9, 10**9, 0, paused_days=0)
+        self.assertEqual(off.archived, [])
+
     def test_done_ambiguous_and_missing(self):
         rc, out = run(self.home, "done", "push")
         self.assertEqual(rc, 2)

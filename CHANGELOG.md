@@ -2,7 +2,31 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 1.4.0
+## 1.5.0
+
+Fixes from a usage audit of one machine (5 days, 17 sessions).
+
+### Fixed
+
+- `inflight audit` no longer reports squash-merged branches as unpushed
+  work. A branch counts as already on the default branch when one commit
+  there, since the merge base, makes exactly the branch's net change. On the
+  audited machine every catch-up finding for one repo (9 branches) was a
+  squash-merged PR.
+- Collision warnings skip a Hermes session's own family (its subagents, its
+  parent, siblings under the same root). 76% of the warnings on the audited
+  machine (84 of 111) were a session being warned about its own subagents.
+
+### Added
+
+- `inflight add --supersedes <id>`: closes this session's open entry `<id>`
+  in the same write, with a `superseded by` line. One session had 16 open
+  entries, 13 of them earlier states of the same work, which pushed the
+  brief over its budget.
+- `inflight trim` archives entries paused longer than `INFLIGHT_PAUSED_DAYS`
+  (default 7, `--paused-days`, 0 = never) whose session has not been active
+  since. Before, paused entries were archived only under budget pressure.
+
 
 ### Added
 

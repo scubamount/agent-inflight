@@ -542,6 +542,11 @@ class AlreadyOnDefault(World):
         git(self.r, "add", "-A")
         git(self.r, "commit", "-qm", f"main moves on ({name})")
 
+    def mainline(self, name):
+        (self.r / f"main-{name}").write_text("m\n")
+        git(self.r, "add", "-A")
+        git(self.r, "commit", "-qm", f"main: {name}")
+
     def test_rebased_branch_listed_already_on_main(self):
         self.branch("feat", ["x1", "x2"])
         for c in git(self.r, "rev-list", "--reverse", "main..feat").split():
@@ -551,11 +556,44 @@ class AlreadyOnDefault(World):
         self.assertEqual(rs.findings, [])
         self.assertEqual(rs.merged, [("feat", "2", "origin/main")])
 
-    def test_squash_of_several_commits_stays_unpushed(self):
+    def test_squash_edited_on_landing_stays_unpushed(self):
         self.branch("sq", ["s1", "s2", "s3"])
+        git(self.r, "merge", "-q", "--squash", "sq")
+        (self.r / "s3").write_text("edited while landing\n")
+        git(self.r, "add", "-A")
+        git(self.r, "commit", "-qm", "squash, edited")
+        git(self.r, "push", "-q")
+        rs = audit.inspect(str(self.r))
+        self.assertEqual(rs.merged, [])
+        self.assertIn("3 unpushed commit(s) on sq (no upstream)", rs.findings)
+
+    def test_failed_squash_check_keeps_it_unpushed(self):
+        def boom(*a):
+            raise safegit.GitError("timed out after 5s")
+        self.assertFalse(audit._squash_merged(boom, "refs/remotes/origin/main", "x"))
+        self.assertFalse(audit._squash_merged(lambda *a: "", None, "x"))
+
+    def test_squash_merged_branch_listed_already_on_main(self):
+        self.branch("sq", ["s1", "s2", "s3"])
+        self.mainline("after")  # the default branch moved on before the squash landed
+        git(self.r, "merge", "-q", "--squash", "sq")
+        git(self.r, "commit", "-qm", "squash (#1)")
+        self.mainline("later")
+        git(self.r, "push", "-q")
+        rs = audit.inspect(str(self.r))
+        self.assertEqual(rs.findings, [])
+        self.assertEqual(rs.merged, [("sq", "3", "origin/main")])
+
+    def test_work_added_after_squash_stays_unpushed(self):
+        self.branch("sq", ["s1", "s2"])
         git(self.r, "merge", "-q", "--squash", "sq")
         git(self.r, "commit", "-qm", "squash")
         git(self.r, "push", "-q")
+        git(self.r, "checkout", "-q", "sq")
+        (self.r / "s3").write_text("late\n")
+        git(self.r, "add", "-A")
+        git(self.r, "commit", "-qm", "late fix")
+        git(self.r, "checkout", "-q", "main")
         rs = audit.inspect(str(self.r))
         self.assertEqual(rs.merged, [])
         self.assertIn("3 unpushed commit(s) on sq (no upstream)", rs.findings)

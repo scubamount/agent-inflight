@@ -86,6 +86,7 @@ def _collisions(sid: str, repo: str) -> List[str]:
     out: List[str] = []
     be: Optional[backends.Chain] = None
     looked = False
+    mine: Optional[str] = None
     for other, d in state.recent(ACTIVE_WINDOW_S):
         if other == sid or d.get("ended_at"):
             continue
@@ -97,6 +98,10 @@ def _collisions(sid: str, repo: str) -> List[str]:
             info = be.lookup(other) if be is not None else None
             if info and info.get("ended_at"):
                 continue
+            if be is not None:  # a subagent and its parent are one piece of work
+                mine = mine or be.family_root(sid)
+                if be.family_root(other) == mine:
+                    continue
         out.append(other)
     return out
 

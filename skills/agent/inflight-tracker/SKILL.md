@@ -1,7 +1,7 @@
 ---
 name: inflight-tracker
 description: Shared cross-session work tracker; read at start, update at end.
-version: 1.4.0
+version: 1.5.0
 author: scubamount, Hermes Agent
 license: Apache-2.0
 platforms: [linux, macos]
@@ -40,6 +40,7 @@ inflight plugin list                  # backend plugins; `enable <name>` to allo
 inflight audit                        # owed git work per session (dry run); --apply writes catch-up entries
 inflight me                           # this session's tag
 inflight add "<thing>: <state>" "<not done; next step; who decides>"
+inflight add "<thing>: <new state>" --supersedes <old-id>   # state changed: replace, don't pile up
 inflight check                        # lint; exit 1 on findings
 inflight done <id|words>              # mark finished; trim archives it after a day
 inflight wait <id> "<who or what>"    # waiting on a person/vendor/CI; shown in every brief; --clear
@@ -82,9 +83,12 @@ Don't recite the tracker back to the user. Use it.
    `[session $HERMES_SESSION_ID]` is untrackable and `inflight check` flags it.
    On Hermes the agent-inflight plugin rewrites such a tag to the real id
    when your own edit wrote the entry, and says so in the tool result.
-2. Taking over another session's entry: edit that entry in place and append
+2. Same work, new state (PR open → merged → released): `inflight add "<thing>: <new state>" --supersedes <old-id>`.
+   It closes your old entry in the same write. One open entry per piece of
+   work; a release diary of entries crowds every other session out of the brief.
+3. Taking over another session's entry: edit that entry in place and append
    `(took over <old-id>)`. Don't add a duplicate.
-3. Resolved work: `inflight done <id>` (the `#a1b2c3` in its tag). Trim
+4. Resolved work: `inflight done <id>` (the `#a1b2c3` in its tag). Trim
    archives it after a day. Deleting the entry by hand also works.
    Blocked on someone else (a user's decision, a vendor, CI): `inflight wait <id>
    "<who>"` so every session's brief shows it; `--clear` when it unblocks.

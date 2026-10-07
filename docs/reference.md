@@ -43,6 +43,11 @@ Prepends one entry to `## Right now`:
 - A period is added to the head if it doesn't end in punctuation.
 - `--force` overrides the credential check (exit 5) only. The override is
   logged to `hooks.log` (pattern kinds and entry id only).
+- `--supersedes <id>` (repeatable) marks this session's open entry `<id>`
+  done in the same write, with a `superseded by #<new-id>` line. Use it when
+  the state of a piece of work changes, instead of adding a second entry
+  beside the first. It refuses (exit 1, nothing written) when `<id>` is not
+  an open entry of this session, and (exit 4) when there is no session id.
 
 ### `inflight brief [--session ID]`
 
@@ -140,7 +145,10 @@ Keeps the brief and the file bounded. Each run takes these steps, in order:
    line `status: paused (stale since <date>)`. "Touched" means the later of
    the entry's head date and its session's last activity.
 2. **Archive done entries.** Done entries older than `INFLIGHT_DONE_GRACE_DAYS`
-   move to the archive.
+   move to the archive. So do entries paused for more than
+   `INFLIGHT_PAUSED_DAYS` whose session has not been active since
+   (`--paused-days`; 0 turns this off). `inflight log` and `inflight show`
+   still find them.
 3. **Archive old sections.** Other `## ` sections move to the archive unless
    their header (or their first 400 characters) carries a date within
    `INFLIGHT_DAYS`. A second `## Right now` section is a stale copy, and it is
@@ -200,7 +208,7 @@ the Hermes cron job use.
 | Uncommitted | `git status` shows changes. Submodules are skipped; they are audited as their own repos. |
 | Unpushed | Commits on no remote-tracking ref (`rev-list <branch> --not --remotes`). A branch with no upstream is flagged `(no upstream)`. |
 | Stash | Any stash entry. |
-| Already on the default branch | Every unpushed commit has a patch-id twin on the remote default branch, for example after a rebase or cherry-pick. This is listed in its own section and is not owed. A squash of several commits has no twin, so it stays unpushed. A failed or timed-out check keeps the branch unpushed. |
+| Already on the default branch | Either every unpushed commit has a patch-id twin on the remote default branch (a rebase or cherry-pick), or the branch was squash-merged: one commit on the default branch since the merge base makes exactly the branch's net change (same paths, same resulting file contents). This is listed in its own section and is not owed. A squash edited while landing, or a branch with work added after the squash, stays unpushed. The squash search looks at no more than 500 default-branch commits. A failed or timed-out check keeps the branch unpushed. |
 | Note | A branch that is ahead of a stale upstream ref, with its commits already on another remote. This is a note, not owed work. |
 
 **Who owns it.** Each finding goes to the session that made it, never to
@@ -341,6 +349,7 @@ All settings are optional and read from the environment.
 | `INFLIGHT_MIN_ENTRIES` | `3` | Newest entries always kept, whatever the budget |
 | `INFLIGHT_STALE_DAYS` | `3` | Days untouched before an active entry is paused |
 | `INFLIGHT_DONE_GRACE_DAYS` | `1` | Days before a done entry is archived |
+| `INFLIGHT_PAUSED_DAYS` | `7` | Days paused (owner inactive) before an entry is archived; `0` = never |
 | `INFLIGHT_DAYS` | `7` | Age at which dated non-`Right now` sections are archived |
 | `INFLIGHT_STALE_MIN` | `120` | `audit`: minutes idle before a session's owed work is caught up |
 | `INFLIGHT_REINJECT` | `1` | Hermes plugin: `0` turns off delivery of the brief |

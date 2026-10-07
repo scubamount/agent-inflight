@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 TIMEOUT_S = 5.0
-READ_ONLY = frozenset({"status", "rev-parse", "for-each-ref", "rev-list"})
+READ_ONLY = frozenset({"status", "rev-parse", "for-each-ref", "rev-list", "merge-base", "diff-tree", "log"})
 _FILTER_KEY = r"^filter\..*\.(clean|smudge|process|required)$"
 _LOCAL_SCOPES = ("local", "worktree", "command")
 
