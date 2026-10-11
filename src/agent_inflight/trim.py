@@ -104,8 +104,7 @@ def plan(text: str, today: date, days: int, max_bytes: int, max_lines: int, min_
                     if j is None or (e.date or date.min) > (s.entries[j].date or date.min):
                         lead[e.session] = i
 
-            def act_for(i: int, e: core.Entry) -> Optional[float]:
-                return activity.get(e.session or "") if lead.get(e.session or "") == i else None
+            lead_act: Dict[int, Optional[float]] = {i: activity.get(sess) for sess, i in lead.items()}
 
             for i, e in enumerate(s.entries):
                 lc = progress.lifecycle(e.text)
@@ -114,12 +113,12 @@ def plan(text: str, today: date, days: int, max_bytes: int, max_lines: int, min_
                         out.archived.append(e.text)
                         continue
                 elif lc.state == "paused":
-                    touched = progress.last_touched(e.date, act_for(i, e))
+                    touched = progress.last_touched(e.date, lead_act.get(i))
                     if paused_days > 0 and lc.since and lc.since < paused_cutoff and (touched or date.min) < paused_cutoff:
                         out.archived.append(e.text)  # paused this long is abandoned; `inflight log` finds it
                         continue
                 elif lc.state == "active":
-                    touched = progress.last_touched(e.date, act_for(i, e))
+                    touched = progress.last_touched(e.date, lead_act.get(i))
                     new_text, changed = progress.reconcile_stale(e.text, touched, today, stale_days)
                     if changed:
                         e = core.Entry(new_text)
