@@ -14,7 +14,9 @@ progress.py): active (default), paused, done.
   1. stale:  an ACTIVE entry untouched for --stale-days becomes paused (a
              `status: paused (stale since D)` line is added). Touched = the
              newer of its head date and its session's last activity, so a
-             session still at work keeps its entry active.
+             session still at work keeps its entry active. Activity counts
+             for that session's NEWEST open entry only; its older entries
+             age on their own head date.
   2. done:   DONE entries older than --done-grace-days are archived.
      paused: entries paused longer than --paused-days, whose session has
              not been active since, are archived (0 turns this off).
@@ -91,6 +93,20 @@ def plan(text: str, today: date, days: int, max_bytes: int, max_lines: int, min_
         if s.is_right_now and not seen_rn:
             seen_rn = True
             keep: List[Tuple[int, core.Entry]] = []
+            # A session's activity vouches for its NEWEST open entry only. A
+            # long-lived session that logs a fresh entry per milestone otherwise
+            # keeps every older one "touched" forever: 25 entries from one 5-day
+            # session sat active in the brief, none ever paused.
+            lead: Dict[str, int] = {}
+            for i, e in enumerate(s.entries):
+                if e.session and progress.lifecycle(e.text).state != "done":
+                    j = lead.get(e.session)
+                    if j is None or (e.date or date.min) > (s.entries[j].date or date.min):
+                        lead[e.session] = i
+
+            def act_for(i: int, e: core.Entry) -> Optional[float]:
+                return activity.get(e.session or "") if lead.get(e.session or "") == i else None
+
             for i, e in enumerate(s.entries):
                 lc = progress.lifecycle(e.text)
                 if lc.state == "done":
@@ -98,12 +114,12 @@ def plan(text: str, today: date, days: int, max_bytes: int, max_lines: int, min_
                         out.archived.append(e.text)
                         continue
                 elif lc.state == "paused":
-                    touched = progress.last_touched(e.date, activity.get(e.session or ""))
+                    touched = progress.last_touched(e.date, act_for(i, e))
                     if paused_days > 0 and lc.since and lc.since < paused_cutoff and (touched or date.min) < paused_cutoff:
                         out.archived.append(e.text)  # paused this long is abandoned; `inflight log` finds it
                         continue
                 elif lc.state == "active":
-                    touched = progress.last_touched(e.date, activity.get(e.session or ""))
+                    touched = progress.last_touched(e.date, act_for(i, e))
                     new_text, changed = progress.reconcile_stale(e.text, touched, today, stale_days)
                     if changed:
                         e = core.Entry(new_text)

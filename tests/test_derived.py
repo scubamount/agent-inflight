@@ -269,6 +269,25 @@ class DoneAndTrim(unittest.TestCase):
         p = trim.plan(self.f.read_text(), date(2026, 9, 30), 7, 10**9, 10**9, 0, activity={"T": time.time()})
         self.assertFalse(any("old work" in h for h in p.paused))
 
+    def test_activity_vouches_for_newest_entry_only(self):
+        """A busy long-lived session keeps its newest entry fresh; its older
+        milestone entries still age out on their head date."""
+        from agent_inflight import trim
+        text = ("## Right now\n\n"
+                "**2026-09-29 10:00 [session L #aaaaa1] — latest milestone.** x\n\n"
+                "**2026-09-20 10:00 [session L #aaaaa2] — old milestone.** y\n\n"
+                "**2026-09-19 10:00 [session L #aaaaa3] — older milestone.** z\n")
+        p = trim.plan(text, date(2026, 9, 30), 7, 10**9, 10**9, 0, activity={"L": time.time()})
+        paused = " ".join(p.paused)
+        self.assertNotIn("latest milestone", paused)
+        self.assertIn("old milestone", paused)
+        self.assertIn("older milestone", paused)
+        # the newest is chosen by date, not file position
+        swapped = text.replace("2026-09-29", "2026-09-10").replace("2026-09-20 10:00 [session L #aaaaa2]", "2026-09-29 10:00 [session L #aaaaa2]")
+        p2 = trim.plan(swapped, date(2026, 9, 30), 7, 10**9, 10**9, 0, activity={"L": time.time()})
+        self.assertNotIn("old milestone", " ".join(p2.paused))
+        self.assertIn("latest milestone", " ".join(p2.paused))
+
     def test_cli_trim_reads_backend_activity(self):
         """Through the real CLI: T's entry is 10 days old; with T active now it stays active,
         without a backend it is paused."""

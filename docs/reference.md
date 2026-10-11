@@ -147,7 +147,9 @@ Keeps the brief and the file bounded. Each run takes these steps, in order:
 
 1. **Pause.** An active entry untouched for `INFLIGHT_STALE_DAYS` gets the
    line `status: paused (stale since <date>)`. "Touched" means the later of
-   the entry's head date and its session's last activity.
+   the entry's head date and its session's last activity. Session activity
+   counts only for that session's newest open entry; its older entries age
+   on their head date.
 2. **Archive done entries.** Done entries older than `INFLIGHT_DONE_GRACE_DAYS`
    move to the archive. So do entries paused for more than
    `INFLIGHT_PAUSED_DAYS` whose session has not been active since

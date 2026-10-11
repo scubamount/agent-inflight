@@ -2,6 +2,18 @@
 
 All notable changes. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.6.1
+
+### Fixed
+
+- Old entries from a long-lived session now go stale. `trim` counted the
+  owner session's last activity as a touch on EVERY one of its entries, so a
+  session that logs a new entry per milestone kept all of them active for as
+  long as it ran: on the audited machine one 5-day session held 25 open
+  entries, none ever paused, and the brief carried them all. Activity now
+  vouches for the session's newest open entry (by date) only; the older ones
+  age on their own head date and pause after `--stale-days`.
+
 ## 1.6.0
 
 ### Fixed
