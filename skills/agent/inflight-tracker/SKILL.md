@@ -125,9 +125,23 @@ Don't recite the tracker back to the user. Use it.
 - **Entries start only at `**YYYY-MM-DD`.** Bold text without a leading date
   is part of the entry above (or reported by `check` if above all entries).
 - **Stale ≠ archived.** An active entry untouched for 3 days becomes
-  `status: paused (stale since D)`; it is archived only under budget
-  pressure, after every done entry. Remove the status line (or
+  `status: paused (stale since D)`. A paused entry is archived after 7 more
+  days without qualifying activity for that entry, or earlier under budget
+  pressure (after every done entry). Remove the status line (or
   `inflight done <id> --reopen`) to reactivate.
+- **Session activity keeps only that session's NEWEST open entry fresh.**
+  Older entries from a busy long-lived session age on their head date. One
+  entry per piece of work (`--supersedes`) keeps the right one alive. If a
+  brief shows many old ACTIVE/IDLE entries from one owner, run
+  `inflight trim` (dry run) and check that it would pause them before
+  you suspect the tracker.
+- **Diagnose a bloated brief with `trim` dry runs, not by hand-editing.** Use
+  `inflight check` for the budget and `inflight trim` for what would be paused
+  or archived. If trim would pause nothing that's clearly stale, the defect is
+  in trim's staleness clock. Fix it in the agent-inflight repo with a test that
+  fails on the old code, release, and redeploy through config-patch 131
+  (`sh config-patches/131-agent-inflight-install.sh`; the file is not
+  executable).
 - **No secrets, no customer PII, no HR data** in entries. The file is plain
   text on disk and gets pasted into model context.
 
