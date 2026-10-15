@@ -707,14 +707,14 @@ class Apply(World):
     def test_recheck_keeps_unprovable_work_marked_and_hand_lines(self):
         audit.apply(audit.build(), self.tracker)
         e = self.entries()[0]
-        text = self.tracker.read_text().replace(e.text, e.text + "\nwaiting on: Andrew decides\n(took over x-1)")
+        text = self.tracker.read_text().replace(e.text, e.text + "\nwaiting on: the maintainer decides\n(took over x-1)")
         self.tracker.write_text(text)
         self.session("live-1", [self.r])  # now two sessions span the file's hour: not provable
         c = audit.apply(audit.build(tracked=audit.tracked_repos(self.tracker)), self.tracker)
         self.assertEqual(c["updated"], 1)
         t = self.entries()[0].text
         self.assertIn("- [ ] uncommitted: 1 modified" + audit.UNPROVEN, t)
-        self.assertIn("waiting on: Andrew decides", t)
+        self.assertIn("waiting on: the maintainer decides", t)
         self.assertIn("(took over x-1)", t)
         self.assertEqual(self.entries()[0].head, e.head)  # date and id unchanged
         c = audit.apply(audit.build(tracked=audit.tracked_repos(self.tracker)), self.tracker)
